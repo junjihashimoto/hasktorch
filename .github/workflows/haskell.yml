@@ -1,0 +1,16 @@
+name: Haskell CI
+
+on: [push]
+
+jobs:
+  build:
+   
+    runs-on: macOS-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: Setup nix
+      run: curl https://nixos.org/nix/install | sh
+    - name: Setup cachix
+      run: bash <(curl https://nixos.org/nix/install)
+    - name: Build
+      run: nix-build
