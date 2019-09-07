@@ -9,7 +9,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: Setup nix
-      run: curl https://nixos.org/nix/install | sh
+      run: |
+        curl https://nixos.org/nix/install | sh
+        . /Users/runner/.nix-profile/etc/profile.d/nix.sh
     - name: Setup cachix
       run: bash <(curl https://nixos.org/nix/install)
     - name: Build
