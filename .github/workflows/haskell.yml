@@ -11,8 +11,11 @@ jobs:
     - name: Setup nix
       run: |
         curl https://nixos.org/nix/install | sh
-        . /Users/runner/.nix-profile/etc/profile.d/nix.sh
     - name: Setup cachix
-      run: bash <(curl https://nixos.org/nix/install)
+      run: |
+        . /Users/runner/.nix-profile/etc/profile.d/nix.sh
+        bash <(curl https://nixos.org/nix/install)
     - name: Build
-      run: nix-build
+      run: |
+        . /Users/runner/.nix-profile/etc/profile.d/nix.sh
+        nix-build
