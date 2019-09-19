@@ -4,10 +4,10 @@ let
   overlayShared = pkgsNew: pkgsOld: {
     libtorch =
       let src = pkgsOld.fetchFromGitHub {
-          owner  = "stites";
+          owner  = "junjihashimoto";
           repo   = "pytorch-world";
-          rev    = "7178a0e61edee422266dae5d984034c3705fce91";
-          sha256 = "0hzl3l3s1nalfiwbh30qswi31irz6bgvrr17brg04hzdspq7rygn";
+          rev    = "c2177b7a202f6265bd93466f101a76f71e478802";
+          sha256 = "01y32rrsbqrqg41sy056g0vrfy4rvnzhl3f2wi7lkdh8mmf0qx60";
         };
       in
       (pkgsOld.python37Packages.callPackage "${src}/pytorch/default.nix" { mklSupport = true; }).dev;
