@@ -76,3 +76,45 @@ dropVariable t = [C.throwBlock| at::Tensor* {
     ret.unsafeGetTensorImpl()->set_autograd_meta(nullptr);
     return new at::Tensor(ret);
   }|]
+
+newtype NodeId = NodeId Int64
+
+data Node = Node
+  { name :: String
+  , nodeId :: NodeId
+  , backwards :: [NodeId]
+  }
+
+toGradGraph :: Ptr Tensor -> Ptr TensorList -> IO [Node]
+toGradGraph y inputs = [C.throwBlock| std::vector<at::Tensor>* {
+    torch::autograd::Variable y = *$(at::Tensor* y);
+    const auto & inputs = *$(std::vector<at::Tensor>* inputs);
+    torch::autograd::edge_list edges { y.gradient_edge() };
+    if (!roots[0].function) {
+      throw std::runtime_error("Differentiated tensor not require grad");
+    }
+    int pos=0;
+    while(pos < edges.size()){
+      auto& edge = edges[pos];
+      auto node  ;
+      for(int i=0;i<inputs.size();i++){
+        auto grad_fn = inputs[i].grad_fn();
+        if (!grad_fn) {
+          grad_fn = input[i].try_get_grad_accumulator();
+        }
+      }
+      pos++;
+    }
+
+
+    for (torch::autograd::Variable input : inputs) {
+      const auto output_nr = input.output_nr();
+      auto grad_fn = input.grad_fn();
+      if (!grad_fn) {
+        grad_fn = input.try_get_grad_accumulator();
+      }
+      if (!input.requires_grad()) {
+        throw std::runtime_error("One of the differentiated Tensors does not require grad");
+      }
+    }
+      
