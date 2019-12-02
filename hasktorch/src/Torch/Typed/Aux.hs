@@ -242,8 +242,8 @@ type family DTypeIsNotHalf (device :: (D.DeviceType, Nat)) (dtype :: D.DType) ::
   DTypeIsNotHalf _                _      = ()
 
 type family DTypeIsNotBool (device :: (D.DeviceType, Nat)) (dtype :: D.DType) :: Constraint where
-  DTypeIsNotHalf '(deviceType, _) D.Bool = UnsupportedDTypeForDevice deviceType D.Bool
-  DTypeIsNotHalf _                _      = ()
+  DTypeIsNotBool '(deviceType, _) D.Bool = UnsupportedDTypeForDevice deviceType D.Bool
+  DTypeIsNotBool _                _      = ()
 
 type family UnsupportedDTypeForDevice (deviceType :: D.DeviceType) (dtype :: D.DType) :: Constraint where
   UnsupportedDTypeForDevice deviceType dtype = TypeError (    Text "This operation does not support "

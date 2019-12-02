@@ -25,6 +25,7 @@ import           Prelude                 hiding ( (.), id )
 import           Control.Arrow
 import           Control.Category
 import           Data.Finite
+import           Numeric.Half
 import           Data.HList
 import           Data.Kind                      ( Constraint
                                                 , Type
@@ -94,6 +95,8 @@ type family ComputeDType (dtype' :: dtype) :: D.DType where
   ComputeDType D.Int32 = D.Int32
   ComputeDType Int = D.Int64
   ComputeDType D.Int64 = D.Int64
+  ComputeDType Half = D.Half
+  ComputeDType D.Half = D.Half
   ComputeDType Float = D.Float
   ComputeDType D.Float = D.Float
   ComputeDType Double = D.Double
@@ -118,6 +121,7 @@ type CUDATensor deviceIndex = Tensor '( 'D.CUDA, deviceIndex)
 type family ComputeHaskellType (dtype :: D.DType) :: Type where
   ComputeHaskellType D.Bool = Bool
   ComputeHaskellType D.Int64 = Int
+  ComputeHaskellType D.Half = Half
   ComputeHaskellType D.Float = Float
   ComputeHaskellType D.Double = Double
   ComputeHaskellType dtype = TypeError (Text "Unsupported tensor type " :<>: ShowType dtype)
@@ -516,6 +520,9 @@ toInt
   :: Tensor device dtype shape
   -> Int
 toInt t = D.toInt $ toDynamic t
+
+toHalf :: forall device . Tensor device 'D.Half '[] -> Half
+toHalf t = D.asValue . toDynamic . toCPU $ t
 
 toFloat :: forall device . Tensor device 'D.Float '[] -> Float
 toFloat t = D.asValue . toDynamic . toCPU $ t

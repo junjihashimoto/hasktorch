@@ -24,6 +24,7 @@ import Data.List (intercalate)
 import Data.Proxy
 import Data.Reflection
 import Numeric
+import qualified Numeric.Half as N
 
 import ATen.Cast
 import ATen.Class (Castable(..), CppTuple2(..), CppTuple3(..), CppTuple4(..))
@@ -202,6 +203,7 @@ class TensorLike a where
   _pokeElemOff :: Ptr () -> Int -> a -> IO ()
 
 int64_opts = withDType Int64 defaultOpts
+half_opts = withDType Half defaultOpts
 float_opts = withDType Float defaultOpts
 
 withTensor :: Tensor -> (Ptr () -> IO a) -> IO a

@@ -11,6 +11,7 @@ import qualified ATen.Type as ATen
 import Data.Int
 import Data.Word
 import Data.Reflection
+import qualified Numeric.Half as N
 
 data DType = Bool | UInt8 | Int8 | Int16 | Int32 | Int64 | Half | Float | Double
   deriving (Eq, Show)
@@ -51,6 +52,12 @@ instance Reifies Int64 DType where
 instance Reifies 'Int64 DType where
   reflect _ = Int64
 
+instance Reifies N.Half DType where
+  reflect _ = Half
+
+instance Reifies 'N.Half DType where
+  reflect _ = Half
+
 instance Reifies Float DType where
   reflect _ = Float
 
@@ -61,7 +68,7 @@ instance Reifies Double DType where
   reflect _ = Double
 
 instance Reifies 'Double DType where
-  reflect _ = Float
+  reflect _ = Double
 
 instance Castable DType ATen.ScalarType where
   cast Bool   f = f ATen.kBool
