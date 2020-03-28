@@ -27,6 +27,29 @@ natValI = fromIntegral $ natVal $ Proxy @n
 natValInt16 :: forall n . KnownNat n => I.Int16
 natValInt16 = fromIntegral $ natVal $ Proxy @n
 
+withNat
+  :: Integer
+  -> ( forall n
+     . KnownNat n
+     => Proxy n
+     -> r
+     )
+  -> r
+withNat i f =
+  case someNatVal i of
+  Just (SomeNat v) -> f v
+  Nothing -> error $ "Can not convert " ++ show i ++ " to Nat"
+
+withNats
+  :: [Integer]
+  -> ( forall n
+     . KnownNat n
+     => Proxy n
+     -> r
+     )
+  -> [r]
+withNats integers f = map (flip withNat f) integers
+
 type family Fst (t :: (a, b)) :: a where
   Torch.Typed.Aux.Fst '(x, _) = x
 
