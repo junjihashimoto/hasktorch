@@ -38,6 +38,7 @@ executable dataloader-cifar10
                      , streaming
                      , JuicyPixels
 
+
 executable bounding-box
   import:              config
   hs-source-dirs:      bounding-box
@@ -47,3 +48,31 @@ executable bounding-box
                      , JuicyPixels
                      , safe-exceptions
                      , split
+
+library yolov3
+  import:              config
+  hs-source-dirs:      yolov3
+  exposed-modules:     Torch.Vision.Darknet.Spec
+                     , Torch.Vision.Darknet.Config
+                     , Torch.Vision.Darknet.Forward
+  ghc-options:         -fno-warn-partial-type-signatures -rtsopts
+  build-depends:       hasktorch
+                     , text
+                     , containers
+                     , config-ini
+                     , bytestring
+                     , serialise
+
+test-suite darknet-spec
+  import:             config
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     darknet
+  main-is:            DarknetSpec.hs
+  build-depends:      base >= 4.7 && < 5
+                    , hasktorch
+                    , yolov3
+                    , containers
+                    , bytestring
+                    , hspec
+                    , safe-exceptions
+
