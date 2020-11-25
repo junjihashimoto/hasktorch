@@ -99,7 +99,7 @@ spec = do
                False)::[Float]) `shouldBe` [0.0,0.0,12.0,0.0]
       (asValue v ::[Float]) `shouldBe` [0.0,0.0,0.0,0.0]
     it "Read config" $ do
-      mconfig <- readIniFile "test/yolov3_config/yolov3.cfg"
+      mconfig <- readIniFile "test/yolov3.cfg"
       spec <- case mconfig of
                 Right cfg@(DarknetConfig global layers) -> do
                   length (toList layers) `shouldBe` 107
@@ -108,11 +108,11 @@ spec = do
                     Left err -> throwIO $ userError err
                 Left err -> throwIO $ userError err
       net <- sample spec
-      net' <- loadWeights net "test/yolov3_config/yolov3.weights"
-      input_data <- System.IO.withFile "test/yolov3_config/input_data" System.IO.ReadMode $ \h -> do
+      net' <- loadWeights net "test/yolov3.weights"
+      input_data <- System.IO.withFile "test/input_data" System.IO.ReadMode $ \h -> do
         loadFloats h (zeros' [1,3,416,416])
       shape (input_data) `shouldBe` [1,3,416,416]
-      output_data0 <- System.IO.withFile "test/yolov3_config/output_data0" System.IO.ReadMode $ \h -> do
+      output_data0 <- System.IO.withFile "test/output_data0" System.IO.ReadMode $ \h -> do
         loadFloats h (zeros' [1,32,416,416])
       shape (output_data0) `shouldBe` [1,32,416,416]
       let output = fst (forwardDarknet net' (Nothing, input_data))

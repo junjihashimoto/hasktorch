@@ -469,9 +469,19 @@ loadWeights (Darknet layers) weights_file = do
   System.IO.withFile weights_file System.IO.ReadMode $ \handle -> do
     _ <- BS.hGet handle (5 * 4) -- skip header
     layers' <- forM layers $ \(i,layer) -> do
-      let cur_params = flattenParameters layer
-      new_params <- forM cur_params $ \param -> loadFloats handle (toDependent param) >>= makeIndependent
-      return $ (i,replaceParameters layer new_params)
+      case layer of
+        LConvolution (Convolution (Conv2d weight bias) a b c) -> do
+          new_params_b <- loadFloats handle (toDependent bias) >>= makeIndependent
+          new_params_w <- loadFloats handle (toDependent weight) >>= makeIndependent
+          return $ (i,LConvolution (Convolution (Conv2d new_params_w new_params_b) a b c))
+        LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d weight bias) batch a b c) -> do
+          new_params_b <- loadFloats handle (toDependent bias) >>= makeIndependent
+          new_params_w <- loadFloats handle (toDependent weight) >>= makeIndependent
+          return $ (i,LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d new_params_w new_params_b) batch a b c))
+        _ -> do
+          let cur_params = flattenParameters layer
+          new_params <- forM cur_params $ \param -> loadFloats handle (toDependent param) >>= makeIndependent
+          return $ (i,replaceParameters layer new_params)
     return $ Darknet layers'
 
 instance Randomizable S.DarknetSpec Darknet where
