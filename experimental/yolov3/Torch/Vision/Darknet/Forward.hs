@@ -8,7 +8,7 @@
 
 module Torch.Vision.Darknet.Forward where
 
-import Control.Monad (forM, mapM)
+import Control.Monad (forM, mapM, join)
 import Data.List ((!!))
 import Data.Map (Map, empty, insert)
 import qualified Data.Map as M
@@ -474,10 +474,14 @@ loadWeights (Darknet layers) weights_file = do
           new_params_b <- loadFloats handle (toDependent bias) >>= makeIndependent
           new_params_w <- loadFloats handle (toDependent weight) >>= makeIndependent
           return $ (i,LConvolution (Convolution (Conv2d new_params_w new_params_b) a b c))
-        LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d weight bias) batch a b c) -> do
-          new_params_b <- loadFloats handle (toDependent bias) >>= makeIndependent
-          new_params_w <- loadFloats handle (toDependent weight) >>= makeIndependent
-          return $ (i,LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d new_params_w new_params_b) batch a b c))
+        LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d weight bias) (BatchNorm bw bb rm rv) a b c) -> do
+          new_bb <- join $ makeIndependent <$> loadFloats handle (toDependent bw)
+          new_bw <- join $ makeIndependent <$> loadFloats handle (toDependent bb)
+          new_rm <- toDependent <$> join (makeIndependentWithRequiresGrad <$> loadFloats handle rm <*> pure False)
+          new_rv <- toDependent <$> join (makeIndependentWithRequiresGrad <$> loadFloats handle rv <*> pure False)
+          new_b <- join $ makeIndependentWithRequiresGrad <$> loadFloats handle (zeros' []) <*> pure False
+          new_w <- join $ makeIndependent <$> loadFloats handle (toDependent weight)
+          return $ (i,LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d new_w new_b) (BatchNorm new_bw new_bb new_rm new_rv) a b c))
         _ -> do
           let cur_params = flattenParameters layer
           new_params <- forM cur_params $ \param -> loadFloats handle (toDependent param) >>= makeIndependent
