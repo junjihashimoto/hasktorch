@@ -61,7 +61,7 @@ library yolov3
                      , containers
                      , config-ini
                      , bytestring
-                     , serialise
+                     , safe-exceptions
 
 test-suite darknet-spec
   import:             config

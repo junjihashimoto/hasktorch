@@ -5,17 +5,18 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
 
 module Torch.Vision.Darknet.Forward where
 
-import Control.Monad (forM, mapM, join)
+import Control.Monad (forM, mapM, join, when)
 import Data.List ((!!))
 import Data.Map (Map, empty, insert)
 import qualified Data.Map as M
 import Data.Maybe (isJust)
 import GHC.Exts
 import GHC.Generics
-import Codec.Serialise
+-- import Codec.Serialise
 import Torch.Autograd
 import qualified Torch.Functional as D
 import qualified Torch.Functional.Internal as I
@@ -30,6 +31,12 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Internal as BSI
 import qualified Foreign.ForeignPtr            as F
 import qualified Foreign.Ptr                   as F
+import Control.Exception.Safe
+  ( SomeException (..),
+    throwIO,
+    try,
+  )
+import Debug.Trace
 
 type Index = Int
 
@@ -150,8 +157,8 @@ instance Randomizable S.ShortCutSpec ShortCut where
     ShortCut
       <$> pure from
 
-instance HasForward ShortCut (Map Int Tensor) Tensor where
-  forward ShortCut {..} inputs = inputs M.! from
+instance HasForward ShortCut (Tensor,Map Int Tensor) Tensor where
+  forward ShortCut {..} (input,inputs) = input + (inputs M.! from)
   forwardStoch f a = pure $ forward f a
 
 type Anchors = [(Float,Float)]
@@ -256,11 +263,11 @@ toAnchorH scaled_anchors = D.reshape [1, length scaled_anchors, 1, 1] $ asTensor
 toPredBox ::
   Yolo ->
   Prediction ->
+  Float ->
   (Tensor,Tensor,Tensor,Tensor)
-toPredBox Yolo {..} prediction =
+toPredBox Yolo {..} prediction stride =
   let input = fromPrediction prediction
       grid_size = D.size 2 input
-      stride = fromIntegral img_size / fromIntegral grid_size :: Float
       scaled_anchors = toScaledAnchors anchors stride
       anchor_w = toAnchorW scaled_anchors
       anchor_h = toAnchorH scaled_anchors
@@ -280,6 +287,18 @@ bboxWhIou (w1',h1') (w2,h2) =
       inter_area = I.min w1 w2 * I.min h1 h2
       union_area = (w1 * h1 + 1e-16) + w2 * h2 - inter_area
     in inter_area / union_area
+
+
+-- bboxIou
+--   :: (Float,Float)
+--   -> (Tensor,Tensor) -- ^ (batch, batch)
+--   -> Tensor -- ^ batch
+-- bboxIou (w1',h1') (w2,h2) =
+--   let w1 = asTensor w1'
+--       h1 = asTensor h1'
+--       inter_area = I.min w1 w2 * I.min h1 h2
+--       union_area = (w1 * h1 + 1e-16) + w2 * h2 - inter_area
+--     in inter_area / union_area
 
 data Target = Target
   { obj_mask :: Tensor
@@ -412,19 +431,20 @@ instance HasForward Yolo (Maybe Tensor, Tensor) Tensor where
         grid_size = D.size 2 input
         g = grid_size
         num_anchors = length anchors
-        img_dim = shape input !! 2
-        stride = (fromIntegral img_dim) / (fromIntegral grid_size) :: Float
+        stride = (fromIntegral img_size) / (fromIntegral grid_size) :: Float
         prediction = toPrediction yolo input
-        pred_boxes = toPredBox yolo prediction
+        pred_boxes = toPredBox yolo prediction stride
         (px,py,pw,ph) = pred_boxes
         pred_cls = toPredClass prediction
         pred_conf = toPredConf prediction
+        cc = D.stack (D.Dim (-1)) [px,py,pw,ph]
      in case train of
-        Nothing -> ( D.cat
+        Nothing -> trace ("shape:"++ show (shape (D.view [num_samples, -1, 4] cc)))
+                   ( D.cat
                (D.Dim (-1))
-               [ stride `D.mulScalar` D.reshape [num_samples, -1, 4] (D.cat (D.Dim 3) [px,py,pw,ph]),
-                 D.reshape [num_samples, -1, 1] pred_conf,
-                 D.reshape [num_samples, -1, classes] pred_cls
+               [ stride `D.mulScalar` D.view [num_samples, -1, 4] cc,
+                 D.view [num_samples, -1, 1] pred_conf,
+                 D.view [num_samples, -1, classes] pred_cls
                ]
              )
         Just target ->
@@ -445,24 +465,35 @@ data Layer
 
 data Darknet = Darknet [(Index, Layer)] deriving (Show, Generic, Parameterized)
 
-instance Serialise Parameter where
-  encode p = encode p' where p' :: [Float] = asValue $ toDependent p
-  decode = IndependentTensor . (asTensor :: [Float] -> Tensor) <$> decode
+-- instance Serialise Parameter where
+--   encode p = encode p' where p' :: [Float] = asValue $ toDependent p
+--   decode = IndependentTensor . (asTensor :: [Float] -> Tensor) <$> decode
 
-instance Serialise Tensor where
-  encode p = encode p' where p' :: [Float] = asValue $ p
-  decode = (asTensor :: [Float] -> Tensor) <$> decode
+-- instance Serialise Tensor where
+--   encode p = encode p' where p' :: [Float] = asValue $ p
+--   decode = (asTensor :: [Float] -> Tensor) <$> decode
+class RawFile a where
+  load :: System.IO.Handle -> a -> IO a
+  save :: System.IO.Handle -> a -> IO ()
 
-loadFloats :: System.IO.Handle -> Tensor -> IO Tensor
-loadFloats handle tensor = do
-  let len = 4 * product (shape tensor)
-  v <- BS.hGet handle len
-  t <- D.clone tensor
-  D.withTensor t $ \ptr1 -> do
-    let (BSI.PS fptr _ len') = v
-    F.withForeignPtr fptr $ \ptr2 -> do
-      BSI.memcpy (F.castPtr ptr1) (F.castPtr ptr2) (min len len')
-      return t
+instance RawFile Tensor where
+  load handle tensor = do
+    let len = (byteLength (dtype tensor)) * product (shape tensor)
+    v <- BS.hGet handle len
+    t <- D.clone tensor
+    D.withTensor t $ \ptr1 -> do
+      let (BSI.PS fptr _ len') = v
+      when (len' < len) $ do
+        throwIO $ userError $ "Read data's size is less than input tensor's one(" <> show len <> ")."
+      F.withForeignPtr fptr $ \ptr2 -> do
+        BSI.memcpy (F.castPtr ptr1) (F.castPtr ptr2) (min len len')
+        return t
+
+  save handle tensor = do
+    let len = (byteLength (dtype tensor)) * product (shape tensor)
+    t <- D.clone tensor
+    D.withTensor tensor $ \ptr1 -> do
+      System.IO.hPutBuf handle (F.castPtr ptr1) len
 
 loadWeights :: Darknet -> String -> IO Darknet
 loadWeights (Darknet layers) weights_file = do
@@ -471,20 +502,29 @@ loadWeights (Darknet layers) weights_file = do
     layers' <- forM layers $ \(i,layer) -> do
       case layer of
         LConvolution (Convolution (Conv2d weight bias) a b c) -> do
-          new_params_b <- loadFloats handle (toDependent bias) >>= makeIndependent
-          new_params_w <- loadFloats handle (toDependent weight) >>= makeIndependent
+          new_params_b <- load handle (toDependent bias) >>= makeIndependent
+          new_params_w <- load handle (toDependent weight) >>= makeIndependent
+          -- print("--conv--")
+          -- print(i)
+          -- print(shape (toDependent weight))
+          -- print(shape (toDependent new_params_w))
           return $ (i,LConvolution (Convolution (Conv2d new_params_w new_params_b) a b c))
         LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d weight bias) (BatchNorm bw bb rm rv) a b c) -> do
-          new_bb <- join $ makeIndependent <$> loadFloats handle (toDependent bw)
-          new_bw <- join $ makeIndependent <$> loadFloats handle (toDependent bb)
-          new_rm <- toDependent <$> join (makeIndependentWithRequiresGrad <$> loadFloats handle rm <*> pure False)
-          new_rv <- toDependent <$> join (makeIndependentWithRequiresGrad <$> loadFloats handle rv <*> pure False)
-          new_b <- join $ makeIndependentWithRequiresGrad <$> loadFloats handle (zeros' []) <*> pure False
-          new_w <- join $ makeIndependent <$> loadFloats handle (toDependent weight)
+          new_bb <- join $ makeIndependent <$> load handle (toDependent bw)
+          new_bw <- join $ makeIndependent <$> load handle (toDependent bb)
+          new_rm <- toDependent <$> join (makeIndependentWithRequiresGrad <$> load handle rm <*> pure False)
+          new_rv <- toDependent <$> join (makeIndependentWithRequiresGrad <$> load handle rv <*> pure False)
+          let [features,_,_,_] = shape $ toDependent weight
+          new_b <- makeIndependentWithRequiresGrad (zeros' [features]) False
+          new_w <- join $ makeIndependent <$> load handle (toDependent weight)
+          -- print("--convb--")
+          -- print(i)
+          -- print(shape (toDependent weight))
+          -- print(shape (toDependent new_w))
           return $ (i,LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d new_w new_b) (BatchNorm new_bw new_bb new_rm new_rv) a b c))
         _ -> do
           let cur_params = flattenParameters layer
-          new_params <- forM cur_params $ \param -> loadFloats handle (toDependent param) >>= makeIndependent
+          new_params <- forM cur_params $ \param -> load handle (toDependent param) >>= makeIndependent
           return $ (i,replaceParameters layer new_params)
     return $ Darknet layers'
 
@@ -525,12 +565,64 @@ forwardDarknet (Darknet layers) (train, input) = loop layers empty []
               let out = forward s layerOutputs
                in loop next (insert idx out layerOutputs) yoloOutputs
             LShortCut s ->
-              let out = forward s layerOutputs
+              let out = forward s (input',layerOutputs)
                in loop next (insert idx out layerOutputs) yoloOutputs
             LYolo s ->
               let out = forward s (train, input')
                in loop next layerOutputs (out : yoloOutputs)
 
+forwardDarknet' :: Int -> Darknet -> (Maybe Tensor, Tensor) -> ((Map Index Tensor),Tensor)
+forwardDarknet' depth (Darknet layers) (train, input) = loop depth layers empty []
+  where
+    loop :: Int -> [(Index, Layer)] -> (Map Index Tensor) -> [Tensor] -> ((Map Index Tensor),Tensor)
+    loop 0 _ maps tensors = (maps,D.cat (D.Dim 1) tensors)
+    loop n [] maps tensors = (maps,D.cat (D.Dim 1) tensors)
+    loop n ((idx, layer) : next) layerOutputs yoloOutputs =
+      let input' = (if idx == 0 then input else layerOutputs M.! (idx -1))
+       in case layer of
+            LConvolution s ->
+              let out = forward s input'
+               in loop (n-1) next (insert idx out layerOutputs) yoloOutputs
+            LConvolutionWithBatchNorm s ->
+              let out = forward s (isJust train, input')
+               in loop (n-1) next (insert idx out layerOutputs) yoloOutputs
+            LMaxPool s ->
+              let out = forward s input'
+               in loop (n-1) next (insert idx out layerOutputs) yoloOutputs
+            LUpSample s ->
+              let out = forward s input'
+               in loop (n-1) next (insert idx out layerOutputs) yoloOutputs
+            LRoute s ->
+              let out = forward s layerOutputs
+               in loop (n-1) next (insert idx out layerOutputs) yoloOutputs
+            LShortCut s ->
+              let out = forward s (input',layerOutputs)
+               in loop (n-1) next (insert idx out layerOutputs) yoloOutputs
+            LYolo s ->
+              let out = forward s (train, input')
+               in loop (n-1) next (insert idx out layerOutputs) (out : yoloOutputs)
+
 instance HasForward Darknet (Maybe Tensor, Tensor) Tensor where
   forward net input = snd $ forwardDarknet net input
   forwardStoch f a = pure $ forward f a
+
+xywh2xyxy
+  -- | input [batch,grid^2,4]
+  :: Tensor
+  -- | output [batch,grid^2,4]
+  -> Tensor
+xywh2xyxy xywh =
+  let x = xywh ! (Ellipsis,0)
+      y = xywh ! (Ellipsis,1)
+      w = xywh ! (Ellipsis,2)
+      h = xywh ! (Ellipsis,3)
+  in D.stack (D.Dim (-1)) [(x - (0.5 `D.mulScalar` w)),
+                           (y - (0.5 `D.mulScalar` h)),
+                           (x + (0.5 `D.mulScalar` w)),
+                           (y + (0.5 `D.mulScalar` h))
+                          ]
+
+nonMaxSuppression :: Tensor -> Float -> Float -> Tensor
+nonMaxSuppression prediction conf_thres nms_thres =
+  let xyxy = xywh2xyxy (prediction ! (Ellipsis, Slice (0,4)))
+  

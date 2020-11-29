@@ -39,7 +39,11 @@ outputChannels cfg@(DarknetConfig' global layer_configs) idx =
     Just x ->
       case x of
         Convolution {..} -> pure filters
-        Route {..} -> foldM (\a b -> (+ b) <$> outputChannels cfg (positive_idx a)) 0 layers
+        Route {..} -> do
+          foldM (\sum' layer -> do
+                    v <- outputChannels cfg (positive_idx layer)
+                    return (v + sum')
+                ) 0 layers
         ShortCut {..} -> outputChannels cfg (positive_idx from)
         _ -> inputChannels cfg idx
   where
@@ -159,3 +163,20 @@ readIniFile filepath = do
             else do
               -- print $ DarknetConfig' (head globalconfigs) (fromList $ zip [0 ..] configs)
               return $ addChannels $ DarknetConfig' (head globalconfigs) (fromList $ zip [0 ..] configs)
+
+readIniFile' :: String -> IO (Either String DarknetConfig')
+readIniFile' filepath = do
+  contents <- T.readFile filepath
+  case parseIniFile contents configParser' of
+    Left error -> return $ Left error
+    Right v -> do
+      let configs = rights $ filter isRight v
+          globalconfigs = lefts $ filter isLeft v
+      if length globalconfigs == 0
+        then return $ Left "net section is not defined."
+        else
+          if length globalconfigs > 1
+            then return $ Left "net section is duplicated."
+            else do
+              -- print $ DarknetConfig' (head globalconfigs) (fromList $ zip [0 ..] configs)
+              return $ Right $ DarknetConfig' (head globalconfigs) (fromList $ zip [0 ..] configs)

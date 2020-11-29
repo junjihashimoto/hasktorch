@@ -85,7 +85,7 @@ toDarknetSpec (C.DarknetConfig global layer_configs) = do
               then pure $ (idx, (LConvolutionWithBatchNormSpec $ ConvolutionWithBatchNormSpec {..}))
               else pure $ (idx, (LConvolutionSpec $ ConvolutionSpec {..}))
           C.MaxPool {..} -> pure $ (idx, (LMaxPoolSpec $ MaxPoolSpec {..}))
-          C.UpSample {..} -> pure $ (idx, (LUpSampleSpec $ UpSampleSpec {upsampleInputFilters=1, upsampleStride = stride}))
+          C.UpSample {..} -> pure $ (idx, (LUpSampleSpec $ UpSampleSpec {upsampleInputFilters= input_filters, upsampleStride = stride}))
           C.Route {..} ->
             pure $
               ( idx,

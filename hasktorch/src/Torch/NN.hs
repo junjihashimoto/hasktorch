@@ -390,6 +390,10 @@ data UpSample = UpSample
   }
   deriving (Show, Generic, Parameterized)
 
+instance Parameterized UpSampleSpec where
+  flattenParameters _ = []
+  _replaceParameters = return
+
 instance Randomizable UpSampleSpec UpSample where
   sample s = do
     UpSample
