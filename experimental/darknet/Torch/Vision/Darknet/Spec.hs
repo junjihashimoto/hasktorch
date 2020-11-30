@@ -6,8 +6,8 @@ module Torch.Vision.Darknet.Spec where
 import Control.Monad (forM)
 import Data.Map (Map)
 import GHC.Exts
-import qualified Torch.Vision.Darknet.Config as C
 import Torch.NN
+import qualified Torch.Vision.Darknet.Config as C
 
 data LayerSpec
   = LConvolutionSpec ConvolutionSpec
@@ -19,55 +19,49 @@ data LayerSpec
   | LYoloSpec YoloSpec
   deriving (Show, Eq)
 
-data ConvolutionSpec
-  = ConvolutionSpec
-      { input_filters :: Int,
-        filters :: Int,
-        layer_size :: Int,
-        stride :: Int,
-        activation :: String
-      }
+data ConvolutionSpec = ConvolutionSpec
+  { input_filters :: Int,
+    filters :: Int,
+    layer_size :: Int,
+    stride :: Int,
+    activation :: String
+  }
   deriving (Show, Eq)
 
-data ConvolutionWithBatchNormSpec
-  = ConvolutionWithBatchNormSpec
-      { input_filters :: Int,
-        filters :: Int,
-        layer_size :: Int,
-        stride :: Int,
-        activation :: String
-      }
+data ConvolutionWithBatchNormSpec = ConvolutionWithBatchNormSpec
+  { input_filters :: Int,
+    filters :: Int,
+    layer_size :: Int,
+    stride :: Int,
+    activation :: String
+  }
   deriving (Show, Eq)
 
-data MaxPoolSpec
-  = MaxPoolSpec
-      { input_filters :: Int,
-        layer_size :: Int,
-        stride :: Int
-      }
+data MaxPoolSpec = MaxPoolSpec
+  { input_filters :: Int,
+    layer_size :: Int,
+    stride :: Int
+  }
   deriving (Show, Eq)
 
-data RouteSpec
-  = RouteSpec
-      { input_filters :: Int,
-        layers :: [Int]
-      }
+data RouteSpec = RouteSpec
+  { input_filters :: Int,
+    layers :: [Int]
+  }
   deriving (Show, Eq)
 
-data ShortCutSpec
-  = ShortCutSpec
-      { input_filters :: Int,
-        from :: Int
-      }
+data ShortCutSpec = ShortCutSpec
+  { input_filters :: Int,
+    from :: Int
+  }
   deriving (Show, Eq)
 
-data YoloSpec
-  = YoloSpec
-      { input_filters :: Int,
-        anchors :: [(Int, Int)],
-        classes :: Int,
-        img_size :: Int
-      }
+data YoloSpec = YoloSpec
+  { input_filters :: Int,
+    anchors :: [(Int, Int)],
+    classes :: Int,
+    img_size :: Int
+  }
   deriving (Show, Eq)
 
 type Index = Int
@@ -85,7 +79,7 @@ toDarknetSpec (C.DarknetConfig global layer_configs) = do
               then pure $ (idx, (LConvolutionWithBatchNormSpec $ ConvolutionWithBatchNormSpec {..}))
               else pure $ (idx, (LConvolutionSpec $ ConvolutionSpec {..}))
           C.MaxPool {..} -> pure $ (idx, (LMaxPoolSpec $ MaxPoolSpec {..}))
-          C.UpSample {..} -> pure $ (idx, (LUpSampleSpec $ UpSampleSpec {upsampleInputFilters= input_filters, upsampleStride = stride}))
+          C.UpSample {..} -> pure $ (idx, (LUpSampleSpec $ UpSampleSpec {upsampleInputFilters = input_filters, upsampleStride = stride}))
           C.Route {..} ->
             pure $
               ( idx,

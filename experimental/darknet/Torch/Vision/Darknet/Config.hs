@@ -40,14 +40,17 @@ outputChannels cfg@(DarknetConfig' global layer_configs) idx =
       case x of
         Convolution {..} -> pure filters
         Route {..} -> do
-          foldM (\sum' layer -> do
-                    v <- outputChannels cfg (positive_idx layer)
-                    return (v + sum')
-                ) 0 layers
+          foldM
+            ( \sum' layer -> do
+                v <- outputChannels cfg (positive_idx layer)
+                return (v + sum')
+            )
+            0
+            layers
         ShortCut {..} -> outputChannels cfg (positive_idx from)
         _ -> inputChannels cfg idx
   where
-    positive_idx idx' = if idx' >= 0 then idx' else idx' +  idx
+    positive_idx idx' = if idx' >= 0 then idx' else idx' + idx
 
 inputChannels :: DarknetConfig' -> Int -> Either String Int
 inputChannels (DarknetConfig' global _) 0 = pure $ channels global
@@ -60,11 +63,10 @@ inputChannels cfg@(DarknetConfig' global layer_configs) idx =
         ShortCut {..} -> outputChannels cfg idx
         _ -> outputChannels cfg (idx -1)
 
-data GlobalConfig
-  = Global
-      { channels :: Int,
-        height :: Int
-      }
+data GlobalConfig = Global
+  { channels :: Int,
+    height :: Int
+  }
   deriving (Show, Eq)
 
 data LayerConfig
@@ -107,45 +109,46 @@ parseInt2List line = do
   return $ loop intlist Nothing
 
 configParser' :: IniParser [Either GlobalConfig LayerConfig]
-configParser' = (toList <$>) $ sectionsOf pure $ \section -> do
-  case section of
-    "net" ->
-      (Left <$>) $
-        Global
-          <$> fieldOf "channels" number
-          <*> fieldOf "height" number
-    "convolutional" ->
-      (Right <$>) $
-        Convolution
-          <$> ((== Just (1 :: Int)) <$> (fieldMbOf "batch_normalize" number))
-          <*> fieldOf "filters" number
-          <*> fieldOf "size" number
-          <*> fieldOf "stride" number
-          <*> fieldOf "activation" string
-    "maxpool" ->
-      (Right <$>) $
-        MaxPool
-          <$> fieldOf "size" number
-          <*> fieldOf "stride" number
-    "upsample" ->
-      (Right <$>) $
-        UpSample
-          <$> fieldOf "stride" number
-    "route" ->
-      (Right <$>) $
-        Route
-          <$> fieldOf "layers" parseIntList
-    "shortcut" ->
-      (Right <$>) $
-        ShortCut
-          <$> fieldOf "from" number
-    "yolo" ->
-      (Right <$>) $
-        Yolo
-          <$> fieldOf "mask" parseIntList
-          <*> fieldOf "anchors" parseInt2List
-          <*> fieldOf "classes" number
-    other -> error $ "Unknown darknet layer-type: " ++ show other
+configParser' = (toList <$>) $
+  sectionsOf pure $ \section -> do
+    case section of
+      "net" ->
+        (Left <$>) $
+          Global
+            <$> fieldOf "channels" number
+            <*> fieldOf "height" number
+      "convolutional" ->
+        (Right <$>) $
+          Convolution
+            <$> ((== Just (1 :: Int)) <$> (fieldMbOf "batch_normalize" number))
+            <*> fieldOf "filters" number
+            <*> fieldOf "size" number
+            <*> fieldOf "stride" number
+            <*> fieldOf "activation" string
+      "maxpool" ->
+        (Right <$>) $
+          MaxPool
+            <$> fieldOf "size" number
+            <*> fieldOf "stride" number
+      "upsample" ->
+        (Right <$>) $
+          UpSample
+            <$> fieldOf "stride" number
+      "route" ->
+        (Right <$>) $
+          Route
+            <$> fieldOf "layers" parseIntList
+      "shortcut" ->
+        (Right <$>) $
+          ShortCut
+            <$> fieldOf "from" number
+      "yolo" ->
+        (Right <$>) $
+          Yolo
+            <$> fieldOf "mask" parseIntList
+            <*> fieldOf "anchors" parseInt2List
+            <*> fieldOf "classes" number
+      other -> error $ "Unknown darknet layer-type: " ++ show other
 
 readIniFile :: String -> IO (Either String DarknetConfig)
 readIniFile filepath = do
