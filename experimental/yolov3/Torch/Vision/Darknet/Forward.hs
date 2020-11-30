@@ -27,16 +27,9 @@ import Torch.TensorFactories
 import Torch.Typed.NN (HasForward (..))
 import qualified Torch.Vision.Darknet.Spec as S
 import qualified System.IO
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Internal as BSI
-import qualified Foreign.ForeignPtr            as F
-import qualified Foreign.Ptr                   as F
-import Control.Exception.Safe
-  ( SomeException (..),
-    throwIO,
-    try,
-  )
 import Debug.Trace
+import Torch.Serialize
+import qualified Data.ByteString as BS
 
 type Index = Int
 
@@ -289,16 +282,27 @@ bboxWhIou (w1',h1') (w2,h2) =
     in inter_area / union_area
 
 
--- bboxIou
---   :: (Float,Float)
---   -> (Tensor,Tensor) -- ^ (batch, batch)
---   -> Tensor -- ^ batch
--- bboxIou (w1',h1') (w2,h2) =
---   let w1 = asTensor w1'
---       h1 = asTensor h1'
---       inter_area = I.min w1 w2 * I.min h1 h2
---       union_area = (w1 * h1 + 1e-16) + w2 * h2 - inter_area
---     in inter_area / union_area
+bboxIou
+  :: Tensor
+  -> Tensor
+  -> Tensor
+bboxIou box1 box2 =
+  let b1_x1 = box1 ! (Ellipsis,0)
+      b1_y1 = box1 ! (Ellipsis,1)
+      b1_x2 = box1 ! (Ellipsis,2)
+      b1_y2 = box1 ! (Ellipsis,3)
+      b2_x1 = box2 ! (Ellipsis,0)
+      b2_y1 = box2 ! (Ellipsis,1)
+      b2_x2 = box2 ! (Ellipsis,2)
+      b2_y2 = box2 ! (Ellipsis,3)
+      inter_rect_x1 = I.max b1_x1 b2_x1
+      inter_rect_y1 = I.max b1_y1 b2_y1
+      inter_rect_x2 = I.min b1_x2 b2_x2
+      inter_rect_y2 = I.min b1_y2 b2_y2
+      inter_area = D.clampMin 0 (inter_rect_x2 - inter_rect_x1 + 1) * D.clampMin 0 (inter_rect_y2 - inter_rect_y1 + 1)
+      b1_area = (b1_x2 - b1_x1 + 1) * (b1_y2 - b1_y1 + 1)
+      b2_area = (b2_x2 - b2_x1 + 1) * (b2_y2 - b2_y1 + 1)
+    in inter_area / (b1_area + b2_area - inter_area + 1e-16)
 
 data Target = Target
   { obj_mask :: Tensor
@@ -439,14 +443,12 @@ instance HasForward Yolo (Maybe Tensor, Tensor) Tensor where
         pred_conf = toPredConf prediction
         cc = D.stack (D.Dim (-1)) [px,py,pw,ph]
      in case train of
-        Nothing -> trace ("shape:"++ show (shape (D.view [num_samples, -1, 4] cc)))
-                   ( D.cat
-               (D.Dim (-1))
-               [ stride `D.mulScalar` D.view [num_samples, -1, 4] cc,
-                 D.view [num_samples, -1, 1] pred_conf,
-                 D.view [num_samples, -1, classes] pred_cls
-               ]
-             )
+        Nothing -> D.cat
+                   (D.Dim (-1))
+                   [ stride `D.mulScalar` D.view [num_samples, -1, 4] cc,
+                     D.view [num_samples, -1, 1] pred_conf,
+                     D.view [num_samples, -1, classes] pred_cls
+                   ]
         Just target ->
           let ignore_thres = 0.5
               build_target = toBuildTargets pred_boxes pred_cls target anchors ignore_thres
@@ -465,36 +467,6 @@ data Layer
 
 data Darknet = Darknet [(Index, Layer)] deriving (Show, Generic, Parameterized)
 
--- instance Serialise Parameter where
---   encode p = encode p' where p' :: [Float] = asValue $ toDependent p
---   decode = IndependentTensor . (asTensor :: [Float] -> Tensor) <$> decode
-
--- instance Serialise Tensor where
---   encode p = encode p' where p' :: [Float] = asValue $ p
---   decode = (asTensor :: [Float] -> Tensor) <$> decode
-class RawFile a where
-  load :: System.IO.Handle -> a -> IO a
-  save :: System.IO.Handle -> a -> IO ()
-
-instance RawFile Tensor where
-  load handle tensor = do
-    let len = (byteLength (dtype tensor)) * product (shape tensor)
-    v <- BS.hGet handle len
-    t <- D.clone tensor
-    D.withTensor t $ \ptr1 -> do
-      let (BSI.PS fptr _ len') = v
-      when (len' < len) $ do
-        throwIO $ userError $ "Read data's size is less than input tensor's one(" <> show len <> ")."
-      F.withForeignPtr fptr $ \ptr2 -> do
-        BSI.memcpy (F.castPtr ptr1) (F.castPtr ptr2) (min len len')
-        return t
-
-  save handle tensor = do
-    let len = (byteLength (dtype tensor)) * product (shape tensor)
-    t <- D.clone tensor
-    D.withTensor tensor $ \ptr1 -> do
-      System.IO.hPutBuf handle (F.castPtr ptr1) len
-
 loadWeights :: Darknet -> String -> IO Darknet
 loadWeights (Darknet layers) weights_file = do
   System.IO.withFile weights_file System.IO.ReadMode $ \handle -> do
@@ -502,29 +474,21 @@ loadWeights (Darknet layers) weights_file = do
     layers' <- forM layers $ \(i,layer) -> do
       case layer of
         LConvolution (Convolution (Conv2d weight bias) a b c) -> do
-          new_params_b <- load handle (toDependent bias) >>= makeIndependent
-          new_params_w <- load handle (toDependent weight) >>= makeIndependent
-          -- print("--conv--")
-          -- print(i)
-          -- print(shape (toDependent weight))
-          -- print(shape (toDependent new_params_w))
+          new_params_b <- loadBinary handle (toDependent bias) >>= makeIndependent
+          new_params_w <- loadBinary handle (toDependent weight) >>= makeIndependent
           return $ (i,LConvolution (Convolution (Conv2d new_params_w new_params_b) a b c))
         LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d weight bias) (BatchNorm bw bb rm rv) a b c) -> do
-          new_bb <- join $ makeIndependent <$> load handle (toDependent bw)
-          new_bw <- join $ makeIndependent <$> load handle (toDependent bb)
-          new_rm <- toDependent <$> join (makeIndependentWithRequiresGrad <$> load handle rm <*> pure False)
-          new_rv <- toDependent <$> join (makeIndependentWithRequiresGrad <$> load handle rv <*> pure False)
+          new_bb <- join $ makeIndependent <$> loadBinary handle (toDependent bw)
+          new_bw <- join $ makeIndependent <$> loadBinary handle (toDependent bb)
+          new_rm <- toDependent <$> join (makeIndependentWithRequiresGrad <$> loadBinary handle rm <*> pure False)
+          new_rv <- toDependent <$> join (makeIndependentWithRequiresGrad <$> loadBinary handle rv <*> pure False)
           let [features,_,_,_] = shape $ toDependent weight
           new_b <- makeIndependentWithRequiresGrad (zeros' [features]) False
-          new_w <- join $ makeIndependent <$> load handle (toDependent weight)
-          -- print("--convb--")
-          -- print(i)
-          -- print(shape (toDependent weight))
-          -- print(shape (toDependent new_w))
+          new_w <- join $ makeIndependent <$> loadBinary handle (toDependent weight)
           return $ (i,LConvolutionWithBatchNorm (ConvolutionWithBatchNorm (Conv2d new_w new_b) (BatchNorm new_bw new_bb new_rm new_rv) a b c))
         _ -> do
           let cur_params = flattenParameters layer
-          new_params <- forM cur_params $ \param -> load handle (toDependent param) >>= makeIndependent
+          new_params <- forM cur_params $ \param -> loadBinary handle (toDependent param) >>= makeIndependent
           return $ (i,replaceParameters layer new_params)
     return $ Darknet layers'
 
@@ -542,34 +506,7 @@ instance Randomizable S.DarknetSpec Darknet where
     pure $ Darknet (fromList layers)
 
 forwardDarknet :: Darknet -> (Maybe Tensor, Tensor) -> ((Map Index Tensor),Tensor)
-forwardDarknet (Darknet layers) (train, input) = loop layers empty []
-  where
-    loop :: [(Index, Layer)] -> (Map Index Tensor) -> [Tensor] -> ((Map Index Tensor),Tensor)
-    loop [] maps tensors = (maps,D.cat (D.Dim 1) tensors)
-    loop ((idx, layer) : next) layerOutputs yoloOutputs =
-      let input' = (if idx == 0 then input else layerOutputs M.! (idx -1))
-       in case layer of
-            LConvolution s ->
-              let out = forward s input'
-               in loop next (insert idx out layerOutputs) yoloOutputs
-            LConvolutionWithBatchNorm s ->
-              let out = forward s (isJust train, input')
-               in loop next (insert idx out layerOutputs) yoloOutputs
-            LMaxPool s ->
-              let out = forward s input'
-               in loop next (insert idx out layerOutputs) yoloOutputs
-            LUpSample s ->
-              let out = forward s input'
-               in loop next (insert idx out layerOutputs) yoloOutputs
-            LRoute s ->
-              let out = forward s layerOutputs
-               in loop next (insert idx out layerOutputs) yoloOutputs
-            LShortCut s ->
-              let out = forward s (input',layerOutputs)
-               in loop next (insert idx out layerOutputs) yoloOutputs
-            LYolo s ->
-              let out = forward s (train, input')
-               in loop next layerOutputs (out : yoloOutputs)
+forwardDarknet = forwardDarknet' (-1)
 
 forwardDarknet' :: Int -> Darknet -> (Maybe Tensor, Tensor) -> ((Map Index Tensor),Tensor)
 forwardDarknet' depth (Darknet layers) (train, input) = loop depth layers empty []
@@ -616,13 +553,61 @@ xywh2xyxy xywh =
       y = xywh ! (Ellipsis,1)
       w = xywh ! (Ellipsis,2)
       h = xywh ! (Ellipsis,3)
-  in D.stack (D.Dim (-1)) [(x - (0.5 `D.mulScalar` w)),
-                           (y - (0.5 `D.mulScalar` h)),
-                           (x + (0.5 `D.mulScalar` w)),
-                           (y + (0.5 `D.mulScalar` h))
-                          ]
+      other = xywh ! (Ellipsis,Slice (4,None))
+  in D.cat (D.Dim (-1)) [
+         D.stack (D.Dim (-1)) [(x - (0.5 `D.mulScalar` w)),
+                               (y - (0.5 `D.mulScalar` h)),
+                               (x + (0.5 `D.mulScalar` w)),
+                               (y + (0.5 `D.mulScalar` h))
+                              ],
+         other
+       ]
 
-nonMaxSuppression :: Tensor -> Float -> Float -> Tensor
-nonMaxSuppression prediction conf_thres nms_thres =
-  let xyxy = xywh2xyxy (prediction ! (Ellipsis, Slice (0,4)))
-  
+toDetection
+  -- | input
+  :: Tensor
+  -- | confidence threshold
+  -> Float
+  -- | [the number of objects that exceed the threshold,7]
+  -> Tensor
+toDetection prediction conf_thres=
+  let indexes = ((prediction ! (Ellipsis, 4)) `D.ge` asTensor conf_thres)
+      prediction' = xywh2xyxy $ prediction ! indexes
+      (values, indices) = D.maxDim (D.Dim (-1)) D.RemoveDim (prediction' ! (Ellipsis, Slice (5,None)))
+      detections =
+        D.cat (D.Dim (-1)) [
+          prediction' ! (Ellipsis, Slice (0,5)),
+          D.stack (D.Dim (-1)) [
+              values,
+              indices
+              ]
+          ]
+      score = prediction' ! (Ellipsis, 4) * values
+      detections' = detections ! (I.argsort score (-1) True)
+  in detections'
+
+nonMaxSuppression
+  :: Tensor
+  -> Float
+  -> Float
+  -> [Tensor]
+nonMaxSuppression prediction conf_thres nms_thres = loop org_detections
+  where
+    org_detections = toDetection prediction conf_thres
+    loop :: Tensor -> [Tensor]
+    loop detections =
+      if (D.size 0 detections == 0)
+      then []
+      else 
+        let detection0 = detections ! 0
+            large_overlap =
+              bboxIou
+                (D.unsqueeze (D.Dim 0) (detection0 ! Slice (None,4)))
+                (detections ! (Ellipsis,Slice (None,4)))
+              `D.ge` asTensor nms_thres
+            label_match = detection0 ! 6 `D.eq` detections ! (Ellipsis, 6)
+            invalid = large_overlap `I.logical_and` label_match
+            weights = D.unsqueeze (D.Dim 1) $ detections ! (invalid,4)
+            detections' = detections ! (I.logical_not invalid)
+            detection' = D.sumDim (D.Dim 0) D.RemoveDim (dtype prediction) (weights * (detections ! (invalid, Slice (0,4)))) / D.sumAll weights
+        in D.cat (D.Dim (-1)) [detection', detection0 ! Slice (4,None)]: loop detections'

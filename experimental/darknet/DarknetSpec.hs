@@ -11,6 +11,7 @@ import Control.Exception.Safe
 import Control.Monad.State.Strict
 
 import Torch.Tensor
+import Torch.Serialize
 import Torch.TensorFactories
 import Torch.NN
 import Torch.Typed.NN (HasForward(..))
@@ -52,11 +53,17 @@ spec = do
       r `shouldBe` [1.0::Float,5.0,3.0,4.0]
   describe "non max suppression" $ do
     it "xywh2xyxy" $ do
-      let v = zeros' [1,504,4]
-      shape (xywh2xyxy v) `shouldBe` [1,504,4]
+      let v = zeros' [504,85]
+      shape (xywh2xyxy v) `shouldBe` [504,85]
     it "[...,:4]" $ do
       let v = zeros' [1,504,85]
       shape (v ! (Ellipsis, Slice (0,4))) `shouldBe` [1,504,4]
+    it "[...,:4]" $ do
+      let v = zeros' [1,504,85]
+          o = ((v ! (Ellipsis, 4)) `ge` asTensor 0.8)
+      shape o `shouldBe` [1,504]
+
+       
   describe "DarknetSpec" $ do
     it "Convolution" $ do
       let spec' = ConvolutionSpec {
@@ -124,10 +131,10 @@ spec = do
       net <- sample spec
       net' <- loadWeights net "test/yolov3.weights"
       input_data <- System.IO.withFile "test/input_data" System.IO.ReadMode $ \h -> do
-        load h (zeros' [1,3,416,416])
+        loadBinary h (zeros' [1,3,416,416])
       shape (input_data) `shouldBe` [1,3,416,416]
       output_data0 <- System.IO.withFile "test/output_data0" System.IO.ReadMode $ \h -> do
-        load h (zeros' [1,32,416,416])
+        loadBinary h (zeros' [1,32,416,416])
       shape (output_data0) `shouldBe` [1,32,416,416]
       let output = fst (forwardDarknet' 107 net' (Nothing, input_data))
       asValue (mseLoss output_data0 (output M.! 0)) < (0.0001::Float) `shouldBe` True
@@ -139,10 +146,8 @@ spec = do
           _ -> do
             (i, shape') `shouldBe` (i, exp_shape)
             output_data <- System.IO.withFile ("test/output_data" ++ show (i-1) ) System.IO.ReadMode $ \h -> do
-              load h (zeros' exp_shape)
+              loadBinary h (zeros' exp_shape)
             let err_value =  asValue (mseLoss output_data (output M.! (i-1))) :: Float
-            print i
-            print err_value
             when (err_value > (0.0001::Float)) $ do
               print output_data
               print (output M.! (i-1))
@@ -150,9 +155,20 @@ spec = do
       let output' = snd (forwardDarknet net' (Nothing, input_data))
           amax = argmax (Dim 2) RemoveDim (output' ! (Slice (), Slice (), Slice (5,None)))
           conf = output' ! (Slice (), Slice (), 4)
+          detections = toDetection output' 0.8
+          objects = nonMaxSuppression output' 0.8 0.4
       shape output' `shouldBe` [1,10647,85]
       shape amax `shouldBe` [1,10647]
       shape conf `shouldBe` [1,10647]
+      shape detections `shouldBe` [4,7]
+      output_detections <- System.IO.withFile "test/output_detections" System.IO.ReadMode $ \h -> do
+        loadBinary h (zeros' [4,7])
+      asValue (mseLoss output_detections detections) < (0.0001::Float) `shouldBe` True
+      output_nonmaxsuppression_0 <- System.IO.withFile "test/output_nonmaxsuppression_0" System.IO.ReadMode $ \h -> do
+        loadBinary h (zeros' [7])
+      length objects `shouldBe` 1
+      asValue (mseLoss output_nonmaxsuppression_0 (head objects)) < (0.0001::Float) `shouldBe` True
+
 
 yolo_shapes = [
               (1, [1,32, 416, 416]),
