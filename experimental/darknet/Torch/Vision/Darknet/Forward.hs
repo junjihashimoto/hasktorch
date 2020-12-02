@@ -118,7 +118,12 @@ instance Randomizable S.MaxPoolSpec MaxPool where
 instance HasForward MaxPool Tensor Tensor where
   forward MaxPool {..} input =
     let pad = (layerSize - 1) `div` 2
-     in D.maxPool2d (layerSize, layerSize) (stride, stride) (pad, pad) (1, 1) D.Floor input
+        out = D.maxPool2d (layerSize, layerSize) (stride, stride) (pad, pad) (1, 1) D.Floor input
+        [n,f,h,w] = shape out
+        padx = D.cat (D.Dim (-1)) [out, zeros' [n,f,h,1]]
+        pady = D.cat (D.Dim (2)) [padx, zeros' [n,f,1,w+1]]
+        out' = if layerSize == 2 && stride ==1 then pady  else out
+     in out'
   forwardStoch f a = pure $ forward f a
 
 data Route = Route

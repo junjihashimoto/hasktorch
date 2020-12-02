@@ -2,6 +2,8 @@
 
 module Main where
 
+import qualified Codec.Picture as I
+import Control.Monad (forM_, when)
 import Control.Exception.Safe
 import Torch.DType
 import Torch.Functional
@@ -11,9 +13,103 @@ import Torch.Vision
 import Torch.Vision.Darknet.Config
 import Torch.Vision.Darknet.Forward
 import Torch.Vision.Darknet.Spec
+import System.Environment (getArgs)
 
+labels :: [String]
+labels = [
+  "person",
+  "bicycle",
+  "car",
+  "motorbike",
+  "aeroplane",
+  "bus",
+  "train",
+  "truck",
+  "boat",
+  "traffic light",
+  "fire hydrant",
+  "stop sign",
+  "parking meter",
+  "bench",
+  "bird",
+  "cat",
+  "dog",
+  "horse",
+  "sheep",
+  "cow",
+  "elephant",
+  "bear",
+  "zebra",
+  "giraffe",
+  "backpack",
+  "umbrella",
+  "handbag",
+  "tie",
+  "suitcase",
+  "frisbee",
+  "skis",
+  "snowboard",
+  "sports ball",
+  "kite",
+  "baseball bat",
+  "baseball glove",
+  "skateboard",
+  "surfboard",
+  "tennis racket",
+  "bottle",
+  "wine glass",
+  "cup",
+  "fork",
+  "knife",
+  "spoon",
+  "bowl",
+  "banana",
+  "apple",
+  "sandwich",
+  "orange",
+  "broccoli",
+  "carrot",
+  "hot dog",
+  "pizza",
+  "donut",
+  "cake",
+  "chair",
+  "sofa",
+  "pottedplant",
+  "bed",
+  "diningtable",
+  "toilet",
+  "tvmonitor",
+  "laptop",
+  "mouse",
+  "remote",
+  "keyboard",
+  "cell phone",
+  "microwave",
+  "oven",
+  "toaster",
+  "sink",
+  "refrigerator",
+  "book",
+  "clock",
+  "vase",
+  "scissors",
+  "teddy bear",
+  "hair drier",
+  "toothbrush"
+  ]
+  
+  
 main = do
-  mconfig <- readIniFile "test/yolov3.cfg"
+  args <- getArgs
+  when (length args /= 4) $ do
+    putStrLn "Usage: yolov3 config-file weight-file input-image-file output-image-file"
+  let config_file = args !! 0
+      weight_file = args !! 1
+      input_file = args !! 2
+      output_file = args !! 3
+    
+  mconfig <- readIniFile config_file
   spec <- case mconfig of
     Right cfg@(DarknetConfig global layers) -> do
       case toDarknetSpec cfg of
@@ -21,9 +117,16 @@ main = do
         Left err -> throwIO $ userError err
     Left err -> throwIO $ userError err
   net <- sample spec
-  net' <- loadWeights net "test/yolov3.weights"
-  readImageAsRGB8WithScaling "test/train.jpg" 416 416 True >>= \case
-    Right input_data -> do
-      let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_data)
-      print $ nonMaxSuppression (snd $ forwardDarknet net' (Nothing, input_data')) 0.8 0.4
+  net' <- loadWeights net weight_file
+  readImageAsRGB8WithScaling input_file 416 416 True >>= \case
+    Right (input_image, input_tensor) -> do
+      let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
+          (outs,out) = forwardDarknet net' (Nothing, input_data')
+          outputs = nonMaxSuppression out 0.8 0.4
+      forM_ outputs $ \output -> do
+        let [x0,y0,x1,y1,object_confidence,class_confidence,classid] = map truncate (asValue output :: [Float])
+        drawString (labels !! classid) (x0+1) (y0+1) (255,255,255) (0,0,0) input_image
+        drawRect x0 y0 x1 y1 (255,255,255) input_image
+      I.writePng output_file input_image
+        
     Left err -> print err
