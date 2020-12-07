@@ -32,6 +32,7 @@ import Torch.TensorFactories
 import Torch.Typed.NN (HasForward (..))
 import qualified Torch.Vision.Darknet.Spec as S
 
+
 type Index = Int
 
 type Loss = Tensor
@@ -319,13 +320,17 @@ data Target = Target
   }
 
 toBuildTargets ::
-  (Tensor, Tensor, Tensor, Tensor) ->
+  (Tensor,Tensor,Tensor,Tensor) ->
   Tensor ->
   Tensor ->
   Anchors ->
   Float ->
   Target
-toBuildTargets (pred_boxes_x, pred_boxes_y, pred_boxes_w, pred_boxes_h) pred_cls target anchors ignore_thres =
+toBuildTargets (pred_boxes_x,
+                pred_boxes_y,
+                pred_boxes_w,
+                pred_boxes_h)
+                pred_cls target anchors ignore_thres =
   let nB = D.size 0 pred_boxes_x
       nA = D.size 1 pred_boxes_x
       nC = D.size (-1) pred_cls
@@ -346,11 +351,11 @@ toBuildTargets (pred_boxes_x, pred_boxes_y, pred_boxes_w, pred_boxes_h) pred_cls
       gj = toType D.Int64 gy
       -- (anchors,batch)
       ious_list = map (\anchor -> bboxWhIou anchor (gw, gh)) anchors
-      ious = D.stack (D.Dim 0) ious_list
+      ious = D.transpose (D.Dim 0) (D.Dim 1) $  D.stack (D.Dim 0) ious_list
       (best_ious, best_n) = I.maxDim ious 0 False
       best_n_anchor = anchors !! (asValue best_n :: Int)
-      b = squeezeLastDim $ D.slice (-1) 0 1 1 target
-      target_labels = squeezeLastDim $ D.slice (-1) 1 2 1 target
+      b = toType D.Int64 $ squeezeLastDim $ D.slice (-1) 0 1 1 target
+      target_labels = toType D.Int64 $ squeezeLastDim $ D.slice (-1) 1 2 1 target
       obj_mask =
         maskedFill
           obj_mask_init
@@ -362,34 +367,36 @@ toBuildTargets (pred_boxes_x, pred_boxes_y, pred_boxes_w, pred_boxes_h) pred_cls
           (b, best_n, gj, gi)
           False
       noobj_mask =
-        maskedFill
-          noobj_mask'
-          (b, ious `D.gt` (asTensor ignore_thres), gj, gi)
-          False
+        foldl ( \v i -> -- trace (show (b , ious `D.gt` (asTensor ignore_thres), gj , gi ,i)) $ 
+          maskedFill
+            v
+            (b ! i, (ious `D.gt` (asTensor ignore_thres)) ! 0, gj ! i, gi ! i)
+            False
+          ) noobj_mask' [0..((D.size 0 gj)-1)]
       tx =
-        indexPut
+        maskedFill
           (zeros' [nB, nA, nG, nG])
-          [b, best_n, gj, gi]
+          (b, best_n, gj, gi)
           (gx - D.floor gx)
       ty =
-        indexPut
+        maskedFill
           (zeros' [nB, nA, nG, nG])
-          [b, best_n, gj, gi]
+          (b, best_n, gj, gi)
           (gy - D.floor gy)
       tw =
-        indexPut
+        maskedFill
           (zeros' [nB, nA, nG, nG])
-          [b, best_n, gj, gi]
+          (b, best_n, gj, gi)
           (I.log (gw / (asTensor (fst best_n_anchor)) + 1e-16))
       th =
-        indexPut
+        maskedFill
           (zeros' [nB, nA, nG, nG])
-          [b, best_n, gj, gi]
+          (b, best_n, gj, gi)
           (I.log (gh / (asTensor (snd best_n_anchor)) + 1e-16))
       tcls =
-        indexPut
+        maskedFill
           tcls_init
-          [b, best_n, gj, gi, target_labels]
+          (b, best_n, gj, gi, target_labels)
           (1 :: Float)
       tconf = toType D.Float obj_mask
    in Target {..}

@@ -153,13 +153,11 @@ readImage file =
     Left err -> return $ Left err
     Right img' -> return $ Right $ (fromDynImage img', pixelFormat img')
 
-readImageAsRGB8 :: FilePath -> IO (Either String (I.Image I.PixelRGB8, D.Tensor))
+readImageAsRGB8 :: FilePath -> IO (Either String D.Tensor)
 readImageAsRGB8 file =
   I.readImage file >>= \case
     Left err -> return $ Left err
-    Right img' -> do
-      let img = I.convertRGB8 $ img'
-      return $ Right (img, fromDynImage . I.ImageRGB8 $ img)
+    Right img' -> return . Right . fromDynImage . I.ImageRGB8 . I.convertRGB8 $ img'
 
 readImageAsRGB8WithScaling :: FilePath -> Int -> Int -> Bool -> IO (Either String (I.Image I.PixelRGB8, D.Tensor))
 readImageAsRGB8WithScaling file width height keepAspectRatio =

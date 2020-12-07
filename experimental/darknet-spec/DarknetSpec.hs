@@ -24,6 +24,7 @@ import Torch.Typed.NN (HasForward (..))
 import Torch.Vision.Darknet.Config
 import Torch.Vision.Darknet.Forward
 import Torch.Vision.Darknet.Spec
+import Data.Word
 
 main = hspec spec
 
@@ -122,7 +123,7 @@ spec = do
         )
         `shouldBe` [0.0, 0.0, 12.0, 0.0]
       (asValue v :: [Float]) `shouldBe` [0.0, 0.0, 0.0, 0.0]
-    it "Read config" $ do
+    it "Inference" $ do
       mconfig <- readIniFile "test/yolov3.cfg"
       Right mconfig' <- readIniFile' "test/yolov3.cfg"
       outputChannels mconfig' 83 `shouldBe` Right 512
@@ -173,6 +174,44 @@ spec = do
         loadBinary h (zeros' [7])
       length objects `shouldBe` 1
       asValue (mseLoss output_nonmaxsuppression_0 (head objects)) < (0.0001 :: Float) `shouldBe` True
+    it "Loss" $ do
+      let readTensor file size =
+            System.IO.withFile ("test/build_targets/" ++ file)  System.IO.ReadMode $ \h -> do
+              loadBinary h (zeros' size)
+          readTensorBool file size =
+            System.IO.withFile ("test/build_targets/" ++ file)  System.IO.ReadMode $ \h -> do
+              loadBinary h (zeros size bool_opts)
+      iboxes <- readTensor "boxs:torch.Size([1, 3, 14, 14, 4])" [1, 3, 14, 14, 4]
+      icls <- readTensor "cls:torch.Size([1, 3, 14, 14, 1])" [1, 3, 14, 14, 1]
+      itarget <- readTensor "target:torch.Size([1, 6])" [1, 6]
+      ianchors <- readTensor "anchors:torch.Size([3, 2])" [3, 2]
+      oclass_mask <- readTensor "class_mask:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      oiou_scores <- readTensor "iou_scores:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      onoobj_mask <- readTensorBool "noobj_mask:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      oobj_mask <- readTensorBool "obj_mask:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      otcls <- readTensor "tcls:torch.Size([1, 3, 14, 14, 1])" [1, 3, 14, 14, 1]
+      otconf <- readTensor "tconf:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      oth <- readTensor "th:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      otw <- readTensor "tw:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      otx <- readTensor "tx:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      oty <- readTensor "ty:torch.Size([1, 3, 14, 14])" [1, 3, 14, 14]
+      print itarget
+      let bx = iboxes ! (Ellipsis, 0)
+          by = iboxes ! (Ellipsis, 1)
+          bw = iboxes ! (Ellipsis, 2)
+          bh = iboxes ! (Ellipsis, 3)
+          iianchors = map (\[a,b] -> (a,b)) $ (asValue ianchors :: [[Float]])
+          target = toBuildTargets (bx,by,bw,bh) icls itarget iianchors 0.5
+      (asValue oobj_mask :: [[[[Bool]]]]) `shouldBe` (asValue (obj_mask target) :: [[[[Bool]]]])
+      (asValue onoobj_mask :: [[[[Bool]]]]) `shouldBe` (asValue (noobj_mask target) :: [[[[Bool]]]])
+      asValue (mseLoss otx (tx target)) < (0.0001 :: Float) `shouldBe` True      
+      asValue (mseLoss oty (ty target)) < (0.0001 :: Float) `shouldBe` True      
+      asValue (mseLoss oth (th target)) < (0.0001 :: Float) `shouldBe` True      
+      asValue (mseLoss otw (tw target)) < (0.0001 :: Float) `shouldBe` True      
+      asValue (mseLoss otcls (tcls target)) < (0.0001 :: Float) `shouldBe` True      
+      asValue (mseLoss otconf (tconf target)) < (0.0001 :: Float) `shouldBe` True      
+
+      
 
 yolo_shapes =
   [ (1, [1, 32, 416, 416]),

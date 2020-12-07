@@ -128,5 +128,4 @@ main = do
         drawString (labels !! classid) (x0+1) (y0+1) (255,255,255) (0,0,0) input_image
         drawRect x0 y0 x1 y1 (255,255,255) input_image
       I.writePng output_file input_image
-        
     Left err -> print err
