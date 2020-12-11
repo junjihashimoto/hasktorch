@@ -122,12 +122,19 @@ train initModel initOptim forward learningRate ptFile = do
       (epochModel', epochOptim') <-
         runContT (streamFromMap (datasetOpts 1) trainingData) $
           trainStep learningRate forward (epochModel, epochOptim) . fst
+      (trainingLoss, trainingError) <-
+        runContT (streamFromMap (datasetOpts 1) trainingData) $
+          evalStep (forward epochModel' False) . fst
       (testLoss, testError) <-
         runContT (streamFromMap (datasetOpts 1) testData) $
           evalStep (forward epochModel' False) . fst
       putStrLn $
         "Epoch: "
           <> show epoch
+          <> ". Training loss: "
+          <> show (trainingLoss / realToFrac (length $ mnistData testData))
+          <> ". Traning error-rate: "
+          <> show (trainingError / realToFrac (length $ mnistData testData))
           <> ". Test loss: "
           <> show (testLoss / realToFrac (length $ mnistData testData))
           <> ". Test error-rate: "

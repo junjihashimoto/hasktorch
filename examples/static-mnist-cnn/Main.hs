@@ -93,7 +93,7 @@ train' ::
   _ =>
   IO ()
 train' = do
-  let learningRate = 0.1
+  let learningRate = 0.005
   manual_seed_L 123
   initModel <- sample (CNNSpec @'Float @device)
   let initOptim = mkAdam 0 0.9 0.999 (flattenParameters initModel)

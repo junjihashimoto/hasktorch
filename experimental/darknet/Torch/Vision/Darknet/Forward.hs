@@ -367,7 +367,7 @@ toBuildTargets (pred_boxes_x,
           (b, best_n, gj, gi)
           False
       noobj_mask =
-        foldl ( \v i -> -- trace (show (b , ious `D.gt` (asTensor ignore_thres), gj , gi ,i)) $ 
+        foldl ( \v i ->
           maskedFill
             v
             (b ! i, (ious `D.gt` (asTensor ignore_thres)) ! 0, gj ! i, gi ! i)
@@ -525,8 +525,8 @@ forwardDarknet' :: Int -> Darknet -> (Maybe Tensor, Tensor) -> ((Map Index Tenso
 forwardDarknet' depth (Darknet layers) (train, input) = loop depth layers empty []
   where
     loop :: Int -> [(Index, Layer)] -> (Map Index Tensor) -> [Tensor] -> ((Map Index Tensor), Tensor)
-    loop 0 _ maps tensors = (maps, D.cat (D.Dim 1) tensors)
-    loop n [] maps tensors = (maps, D.cat (D.Dim 1) tensors)
+    loop 0 _ maps tensors = (maps, D.cat (D.Dim 1) (reverse tensors))
+    loop n [] maps tensors = (maps, D.cat (D.Dim 1) (reverse tensors))
     loop n ((idx, layer) : next) layerOutputs yoloOutputs =
       let input' = (if idx == 0 then input else layerOutputs M.! (idx -1))
        in case layer of
@@ -586,22 +586,25 @@ toDetection ::
   Tensor ->
   -- | confidence threshold
   Float ->
-  -- | (the number of objects that exceed the threshold,7)
+  -- | (the number of objects that exceed the threshold)
   Tensor
 toDetection prediction conf_thres =
   let indexes = ((prediction ! (Ellipsis, 4)) `D.ge` asTensor conf_thres)
-      prediction' = xywh2xyxy $ prediction ! indexes
-      (values, indices) = D.maxDim (D.Dim (-1)) D.RemoveDim (prediction' ! (Ellipsis, Slice (5, None)))
-      detections =
-        D.cat
+      prediction' = trace (show (D.shape prediction)) $ xywh2xyxy $ prediction ! indexes
+      n = (reverse $ D.shape prediction) !! 1
+      ids = (D.reshape [1,n] $ (arange' (0 :: Int) n (1 :: Int))) ! indexes
+      offset_class = 5
+      (values, indices) = D.maxDim (D.Dim (-1)) D.RemoveDim (prediction' ! (Ellipsis, Slice (offset_class, None)))
+      list_of_detections =
+        [ prediction' ! (Ellipsis, Slice (0, 5)),
+          D.stack
           (D.Dim (-1))
-          [ prediction' ! (Ellipsis, Slice (0, 5)),
-            D.stack
-              (D.Dim (-1))
-              [ values,
-                indices
-              ]
+          [ values,
+            indices,
+            ids
           ]
+        ]
+      detections = D.cat (D.Dim (-1)) list_of_detections
       score = prediction' ! (Ellipsis, 4) * values
       detections' = detections ! (I.argsort score (-1) True)
    in detections'
@@ -631,3 +634,10 @@ nonMaxSuppression prediction conf_thres nms_thres = loop org_detections
               detections' = detections ! (I.logical_not invalid)
               detection' = D.sumDim (D.Dim 0) D.RemoveDim (dtype prediction) (weights * (detections ! (invalid, Slice (0, 4)))) / D.sumAll weights
            in D.cat (D.Dim (-1)) [detection', detection0 ! Slice (4, None)] : loop detections'
+
+updateDarknet :: Darknet -> (Int -> Layer -> IO Layer) -> IO Darknet
+updateDarknet (Darknet darknet) func = do
+  v <- forM darknet $ \(i,layer) -> do
+    vv <- func i layer
+    return (i,vv)
+  return $ Darknet v

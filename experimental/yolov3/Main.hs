@@ -1,14 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 
 module Main where
 
 import qualified Codec.Picture as I
 import Control.Monad (forM_, when)
 import Control.Exception.Safe
-import Torch.DType
-import Torch.Functional
-import Torch.NN
-import Torch.Tensor
+import Torch hiding (conv2d, indexPut)
 import Torch.Vision
 import Torch.Vision.Darknet.Config
 import Torch.Vision.Darknet.Forward
@@ -98,7 +98,22 @@ labels = [
   "hair drier",
   "toothbrush"
   ]
-  
+
+id2layer :: Int -> (Int,Int,Int,Int)
+id2layer i =
+  if i < layer0 then func 0 13 i
+  else if i < layer0 + layer1 then func 1 26 (i-layer0)
+  else func 2 52 (i-layer0-layer1)
+  where
+    func layer grid j =
+      let gridy = (j `Prelude.mod` (grid*grid)) `Prelude.div` grid
+          gridx = (j `Prelude.mod` (grid*grid)) `Prelude.mod` grid
+          anchor = j `Prelude.div` (grid*grid)
+      in (gridx,gridy,anchor,layer)
+    layer0 = 13 * 13 * 3
+    layer1 = 26 * 26 * 3
+    layer2 = 52 * 52 * 3
+
   
 main = do
   args <- getArgs
@@ -118,14 +133,34 @@ main = do
     Left err -> throwIO $ userError err
   net <- sample spec
   net' <- loadWeights net weight_file
+  net'' <- updateDarknet net' $ \i layer -> do
+    case layer of
+      LConvolution c ->
+        if i == 93 then do
+          let c2 = (conv2d :: Convolution -> Conv2d) c
+              w = conv2dWeight c2
+              b = conv2dBias c2
+              addr = [(85*(5`mod`3)::Int)+4,153,0,0]
+              v = 0.74682 :: Float
+              c' = c2 {conv2dWeight = IndependentTensor $ indexPut (toDependent w) addr v }
+          print i
+          print $ shape (toDependent w)
+          return $ LConvolution c{conv2d =c'}
+        else return layer
+      _ -> return layer
+  
   readImageAsRGB8WithScaling input_file 416 416 True >>= \case
     Right (input_image, input_tensor) -> do
       let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
-          (outs,out) = forwardDarknet net' (Nothing, input_data')
+          (outs,out) = forwardDarknet net'' (Nothing, input_data')
           outputs = nonMaxSuppression out 0.8 0.4
-      forM_ outputs $ \output -> do
-        let [x0,y0,x1,y1,object_confidence,class_confidence,classid] = map truncate (asValue output :: [Float])
-        drawString (labels !! classid) (x0+1) (y0+1) (255,255,255) (0,0,0) input_image
+      forM_ (zip [0..] outputs) $ \(i, output) -> do
+        let [x0,y0,x1,y1,object_confidence,class_confidence,classid,ids] = map truncate (asValue output :: [Float])
+        print $ (i, id2layer ids, map truncate (asValue output :: [Float]))
+        drawString (show i ++ " " ++ labels !! classid) (x0+1) (y0+1) (255,255,255) (0,0,0) input_image
         drawRect x0 y0 x1 y1 (255,255,255) input_image
+      forM_ [1..15] $ \i -> do
+        drawLine (i * 26) 0 (i * 26) 416 (0,0,127) input_image
+        drawLine 0 (i * 26) 416 (i * 26) (0,0,127) input_image
       I.writePng output_file input_image
     Left err -> print err
