@@ -153,16 +153,18 @@ main = do
   readImageAsRGB8WithScaling input_file 416 416 True >>= \case
     Right (input_image, input_tensor) -> do
       let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
-          (outs,out) = forwardDarknet net' (Nothing, input_data')
+          (outs,out) = forwardDarknet net'' (Nothing, input_data')
           outputs = nonMaxSuppression out 0.8 0.4
           func input =
-            let (outs,_) = forwardDarknet net' (Nothing, input)
+            let (outs,_) = forwardDarknet net'' (Nothing, input)
             in (outs M.! 92) ! (0,153,11,13)
+            --in (outs M.! 93) ! (0,85*2+4,11,13)
       print "--"
       print $ shape $ (outs M.! 92)
+      print $ shape $ (outs M.! 93)
       print $ shape $ (outs M.! 92) ! (0,153,11,13)
       v <- smoothGrad 10 0.2 func input_data'
-      let img = toType UInt8 $ chw2hwc $ clamp 0 255 $ (mulScalar (102400::Float) v) + (mulScalar (255::Float) input_data' )
+      let img = toType UInt8 $ chw2hwc $ clamp 0 255 $ (mulScalar (1024*100::Float) v) + (mulScalar (255::Float) input_data' )
       writePng "o2.png" $ img
       
 

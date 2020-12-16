@@ -29,6 +29,7 @@ import qualified Torch.Internal.Managed.Type.Tensor as ATen
 import Torch.Scalar
 import Torch.Tensor
 import Torch.TensorFactories (ones', randIO', randnIO', zeros')
+import Torch.Device
 
 type Parameter = IndependentTensor
 
@@ -393,6 +394,7 @@ data UpSample = UpSample
 instance Parameterized UpSampleSpec where
   flattenParameters _ = []
   _replaceParameters = return
+  replaceDevice _ = id  
 
 instance Randomizable UpSampleSpec UpSample where
   sample s = do

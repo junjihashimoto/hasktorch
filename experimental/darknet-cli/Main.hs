@@ -25,6 +25,9 @@ main = do
   let config_file = args !! 0
       weight_file = args !! 1
       input_file = args !! 2
+      device = Device CUDA 0
+      toDev = toDevice device
+      toHost = toDevice (Device CPU 0)
     
   mconfig <- readIniFile config_file
   spec <- case mconfig of
@@ -35,16 +38,18 @@ main = do
     Left err -> throwIO $ userError err
   net <- sample spec
   net' <- loadWeights net weight_file
+  let net'' = replaceDevice device net'
   
 --  readImageAsRGB8WithScaling input_file 224 224 True >>= \case
   readImageAsRGB8WithScaling input_file 256 256 True >>= \case
     Right (input_image, input_tensor) -> do
-      let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
-          (out2,out) = forwardDarknet net' (Nothing, input_data')
+      let input_data' = toDev $ divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
+          (out2,out) = forwardDarknet net'' (Nothing, input_data')
+      -- print input_data'
       forM_ ((0,input_data'): M.toList out2) $ \(layer,o) -> do
         print $ show layer ++ " : " ++ show (shape o)
       print $ argmax (Dim 0) RemoveDim $ squeezeAll out
-      let idx = asValue $  argmax (Dim 0) RemoveDim $ squeezeAll out
+      let idx = asValue $ toHost $ argmax (Dim 0) RemoveDim $ squeezeAll out
       print $ labels !! idx
     Left err -> print err
 

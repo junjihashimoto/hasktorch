@@ -196,11 +196,13 @@ instance HasForward ShortCut (Tensor, Map Int Tensor) Tensor where
             if o == i
               then return $ one2d stride
               else return $ zero2d stride
+        dev = device input
+        weight' = toDevice dev $ asTensor weight
         activation = if isLeaky then flip I.leaky_relu 0.1 else id
      in -- trace (show (D.shape input) ++ show (D.shape shortcut) ++"\n") $
         if c0 == c1 && x0 == x1 && y0 == y1
           then activation $ input + shortcut
-          else activation $ input + D.conv2d' (asTensor weight) (zeros' [c0]) (stride, stride) (0, 0) shortcut
+          else activation $ input + D.conv2d' weight' (toDevice dev $ zeros' [c0]) (stride, stride) (0, 0) shortcut
   forwardStoch f a = pure $ forward f a
 
 type Anchors = [(Float, Float)]
