@@ -2,11 +2,12 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
 
 module Main where
 
 import qualified Codec.Picture as I
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, when, foldM)
 import Control.Exception.Safe
 import Torch hiding (conv2d, indexPut)
 import Torch.Vision
@@ -14,6 +15,7 @@ import Torch.Vision.Darknet.Config
 import Torch.Vision.Darknet.Forward
 import Torch.Vision.Darknet.Spec
 import System.Environment (getArgs)
+import qualified Data.Map as M
 
 labels :: [String]
 labels = [
@@ -114,7 +116,21 @@ id2layer i =
     layer1 = 26 * 26 * 3
     layer2 = 52 * 52 * 3
 
-  
+smoothGrad :: Int -> Float -> (Tensor -> Tensor) -> Tensor -> IO Tensor
+smoothGrad num_samples standard_deviation func input_image = do
+  v <- foldM loop init [1..num_samples]
+  return $ (1.0 / fromIntegral num_samples) `mulScalar` v 
+  where
+    image_shape = shape input_image
+    init = zeros' image_shape
+    loop sum' _ = do
+      r <- randnIO' image_shape
+      input <- makeIndependent $ input_image + (standard_deviation `mulScalar` r)
+      let loss = func $ toDependent input
+          (g:_) = grad loss [input]
+      return $ sum' + Torch.abs g
+
+
 main = do
   args <- getArgs
   when (length args /= 4) $ do
@@ -140,7 +156,7 @@ main = do
           let c2 = (conv2d :: Convolution -> Conv2d) c
               w = conv2dWeight c2
               b = conv2dBias c2
-              addr = [(85*(5`mod`3)::Int)+4,153,0,0]
+              addr = [85*2+4,153,0,0] :: [Int]
               v = 0.74682 :: Float
               c' = c2 {conv2dWeight = IndependentTensor $ indexPut (toDependent w) addr v }
           print i
@@ -154,13 +170,29 @@ main = do
       let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
           (outs,out) = forwardDarknet net'' (Nothing, input_data')
           outputs = nonMaxSuppression out 0.8 0.4
+          func input =
+            let (outs,_) = forwardDarknet net'' (Nothing, input)
+            in (outs M.! 92) ! (0,153,11,13)
+      print "--"
+      print $ shape $ (outs M.! 92)
+      print $ shape $ (outs M.! 92) ! (0,153,11,13)
+      v <- smoothGrad 10 0.2 func input_data'
+      let img = toType UInt8 $ chw2hwc $ clamp 0 255 $ (mulScalar (102400::Float) v) + (mulScalar (255::Float) input_data' )
+      writePng "o2.png" $ img
+      
+
       forM_ (zip [0..] outputs) $ \(i, output) -> do
         let [x0,y0,x1,y1,object_confidence,class_confidence,classid,ids] = map truncate (asValue output :: [Float])
         print $ (i, id2layer ids, map truncate (asValue output :: [Float]))
         drawString (show i ++ " " ++ labels !! classid) (x0+1) (y0+1) (255,255,255) (0,0,0) input_image
         drawRect x0 y0 x1 y1 (255,255,255) input_image
-      forM_ [1..15] $ \i -> do
-        drawLine (i * 26) 0 (i * 26) 416 (0,0,127) input_image
-        drawLine 0 (i * 26) 416 (i * 26) (0,0,127) input_image
+      let gridsize0 = 416 `Prelude.div` 13
+          gridsize1 = 416 `Prelude.div` 26
+          gridsize2 = 416 `Prelude.div` 52
+          gridsize = 26
+      forM_ [1..26] $ \i -> do
+        drawLine (i * gridsize1) 0 (i * gridsize1) 416 (0,0,127) input_image
+        drawLine 0 (i * gridsize1) 416 (i * gridsize1) (0,0,127) input_image
+      drawRect (11 * gridsize1) (13 * gridsize1) (12 * gridsize1) (14 * gridsize1) (255,0,0) input_image
       I.writePng output_file input_image
     Left err -> print err

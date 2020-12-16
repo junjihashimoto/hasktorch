@@ -10,6 +10,7 @@ import Control.Exception.Safe
 import Control.Monad.State.Strict
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as M
+import Data.Word
 import GHC.Exts
 import GHC.Generics
 import qualified System.IO
@@ -24,7 +25,6 @@ import Torch.Typed.NN (HasForward (..))
 import Torch.Vision.Darknet.Config
 import Torch.Vision.Darknet.Forward
 import Torch.Vision.Darknet.Spec
-import Data.Word
 
 main = hspec spec
 
@@ -63,7 +63,7 @@ spec = do
           o = ((v ! (Ellipsis, 4)) `ge` asTensor 0.8)
       shape o `shouldBe` [1, 504]
 
-  describe "DarknetSpec" $ do
+  describe "DarknetSpec-Yolov3" $ do
     it "Convolution" $ do
       let spec' =
             ConvolutionSpec
@@ -136,10 +136,10 @@ spec = do
         Left err -> throwIO $ userError err
       net <- sample spec
       net' <- loadWeights net "test/yolov3.weights"
-      input_data <- System.IO.withFile "test/input_data" System.IO.ReadMode $ \h -> do
+      input_data <- System.IO.withFile "test/yolov3/input_data" System.IO.ReadMode $ \h -> do
         loadBinary h (zeros' [1, 3, 416, 416])
       shape (input_data) `shouldBe` [1, 3, 416, 416]
-      output_data0 <- System.IO.withFile "test/output_data0" System.IO.ReadMode $ \h -> do
+      output_data0 <- System.IO.withFile "test/yolov3/output_data0" System.IO.ReadMode $ \h -> do
         loadBinary h (zeros' [1, 32, 416, 416])
       shape (output_data0) `shouldBe` [1, 32, 416, 416]
       let output = fst (forwardDarknet' 107 net' (Nothing, input_data))
@@ -151,7 +151,7 @@ spec = do
           [] -> (i, []) `shouldBe` (i, exp_shape)
           _ -> do
             (i, shape') `shouldBe` (i, exp_shape)
-            output_data <- System.IO.withFile ("test/output_data" ++ show (i -1)) System.IO.ReadMode $ \h -> do
+            output_data <- System.IO.withFile ("test/yolov3/output_data" ++ show (i -1)) System.IO.ReadMode $ \h -> do
               loadBinary h (zeros' exp_shape)
             let err_value = asValue (mseLoss output_data (output M.! (i -1))) :: Float
             when (err_value > (0.0001 :: Float)) $ do
@@ -161,25 +161,25 @@ spec = do
       let output' = snd (forwardDarknet net' (Nothing, input_data))
           amax = argmax (Dim 2) RemoveDim (output' ! (Slice (), Slice (), Slice (5, None)))
           conf = output' ! (Slice (), Slice (), 4)
-          detections = toDetection output' 0.8 ! (Ellipsis, Slice (0,7))
-          objects = map (\obj -> obj ! (Ellipsis, Slice (0,7)) ) $ nonMaxSuppression output' 0.8 0.4
+          detections = toDetection output' 0.8 ! (Ellipsis, Slice (0, 7))
+          objects = map (\obj -> obj ! (Ellipsis, Slice (0, 7))) $ nonMaxSuppression output' 0.8 0.4
       shape output' `shouldBe` [1, 10647, 85]
       shape amax `shouldBe` [1, 10647]
       shape conf `shouldBe` [1, 10647]
       shape detections `shouldBe` [4, 7]
-      output_detections <- System.IO.withFile "test/output_detections" System.IO.ReadMode $ \h -> do
+      output_detections <- System.IO.withFile "test/yolov3/output_detections" System.IO.ReadMode $ \h -> do
         loadBinary h (zeros' [4, 7])
       asValue (mseLoss output_detections detections) < (0.0001 :: Float) `shouldBe` True
-      output_nonmaxsuppression_0 <- System.IO.withFile "test/output_nonmaxsuppression_0" System.IO.ReadMode $ \h -> do
+      output_nonmaxsuppression_0 <- System.IO.withFile "test/yolov3/output_nonmaxsuppression_0" System.IO.ReadMode $ \h -> do
         loadBinary h (zeros' [7])
       length objects `shouldBe` 1
       asValue (mseLoss output_nonmaxsuppression_0 (head objects)) < (0.0001 :: Float) `shouldBe` True
     it "Loss" $ do
       let readTensor file size =
-            System.IO.withFile ("test/build_targets/" ++ file)  System.IO.ReadMode $ \h -> do
+            System.IO.withFile ("test/build_targets/" ++ file) System.IO.ReadMode $ \h -> do
               loadBinary h (zeros' size)
           readTensorBool file size =
-            System.IO.withFile ("test/build_targets/" ++ file)  System.IO.ReadMode $ \h -> do
+            System.IO.withFile ("test/build_targets/" ++ file) System.IO.ReadMode $ \h -> do
               loadBinary h (zeros size bool_opts)
       iboxes <- readTensor "boxs:torch.Size([1, 3, 14, 14, 4])" [1, 3, 14, 14, 4]
       icls <- readTensor "cls:torch.Size([1, 3, 14, 14, 1])" [1, 3, 14, 14, 1]
@@ -200,18 +200,44 @@ spec = do
           by = iboxes ! (Ellipsis, 1)
           bw = iboxes ! (Ellipsis, 2)
           bh = iboxes ! (Ellipsis, 3)
-          iianchors = map (\[a,b] -> (a,b)) $ (asValue ianchors :: [[Float]])
-          target = toBuildTargets (bx,by,bw,bh) icls itarget iianchors 0.5
+          iianchors = map (\[a, b] -> (a, b)) $ (asValue ianchors :: [[Float]])
+          target = toBuildTargets (bx, by, bw, bh) icls itarget iianchors 0.5
       (asValue oobj_mask :: [[[[Bool]]]]) `shouldBe` (asValue (obj_mask target) :: [[[[Bool]]]])
       (asValue onoobj_mask :: [[[[Bool]]]]) `shouldBe` (asValue (noobj_mask target) :: [[[[Bool]]]])
-      asValue (mseLoss otx (tx target)) < (0.0001 :: Float) `shouldBe` True      
-      asValue (mseLoss oty (ty target)) < (0.0001 :: Float) `shouldBe` True      
-      asValue (mseLoss oth (th target)) < (0.0001 :: Float) `shouldBe` True      
-      asValue (mseLoss otw (tw target)) < (0.0001 :: Float) `shouldBe` True      
-      asValue (mseLoss otcls (tcls target)) < (0.0001 :: Float) `shouldBe` True      
-      asValue (mseLoss otconf (tconf target)) < (0.0001 :: Float) `shouldBe` True      
-
-      
+      asValue (mseLoss otx (tx target)) < (0.0001 :: Float) `shouldBe` True
+      asValue (mseLoss oty (ty target)) < (0.0001 :: Float) `shouldBe` True
+      asValue (mseLoss oth (th target)) < (0.0001 :: Float) `shouldBe` True
+      asValue (mseLoss otw (tw target)) < (0.0001 :: Float) `shouldBe` True
+      asValue (mseLoss otcls (tcls target)) < (0.0001 :: Float) `shouldBe` True
+      asValue (mseLoss otconf (tconf target)) < (0.0001 :: Float) `shouldBe` True
+  describe "DarknetSpec-Resnet" $ do
+    it "Inference" $ do
+      mconfig <- readIniFile "test/resnet18.cfg"
+      Right mconfig' <- readIniFile' "test/resnet18.cfg"
+      spec <- case mconfig of
+        Right cfg@(DarknetConfig global layers) -> do
+          case toDarknetSpec cfg of
+            Right spec -> return spec
+            Left err -> throwIO $ userError err
+        Left err -> throwIO $ userError err
+      net <- sample spec
+      net' <- loadWeights net "test/resnet18.weights"
+      input_data <- System.IO.withFile "test/resnet18/input0.bin" System.IO.ReadMode $ \h -> do
+        loadBinary h (zeros' [1, 3, 256, 256])
+      forM_ resnet_shapes $ \(i, exp_shape) -> do
+        let output = fst (forwardDarknet' i net' (Nothing, input_data))
+            shape' = shape (output M.! (i -1))
+        case exp_shape of
+          [] -> (i, []) `shouldBe` (i, exp_shape)
+          _ -> do
+            (i, shape') `shouldBe` (i, exp_shape)
+            output_data <- System.IO.withFile ("test/resnet18/output" ++ show (i -1) ++ ".bin") System.IO.ReadMode $ \h -> do
+              loadBinary h (zeros' exp_shape)
+            let err_value = asValue (mseLoss output_data (output M.! (i -1))) :: Float
+            when (err_value > (0.0001 :: Float)) $ do
+              print output_data
+              print (output M.! (i -1))
+            err_value < (0.0001 :: Float) `shouldBe` True
 
 yolo_shapes =
   [ (1, [1, 32, 416, 416]),
@@ -321,4 +347,36 @@ yolo_shapes =
     (105, [1, 256, 52, 52]),
     (106, [1, 255, 52, 52]),
     (107, [1, 8112, 85])
+  ]
+
+resnet_shapes =
+  [ (1, [1, 64, 128, 128]),
+    (2, [1, 64, 64, 64]),
+    (3, [1, 64, 64, 64]),
+    (4, [1, 64, 64, 64]),
+    (5, [1, 64, 64, 64]),
+    (6, [1, 64, 64, 64]),
+    (7, [1, 64, 64, 64]),
+    (8, [1, 64, 64, 64]),
+    (9, [1, 128, 32, 32]),
+    (10, [1, 128, 32, 32]),
+    (11, [1, 128, 32, 32]),
+    (12, [1, 128, 32, 32]),
+    (13, [1, 128, 32, 32]),
+    (14, [1, 128, 32, 32]),
+    (15, [1, 256, 16, 16]),
+    (16, [1, 256, 16, 16]),
+    (17, [1, 256, 16, 16]),
+    (18, [1, 256, 16, 16]),
+    (19, [1, 256, 16, 16]),
+    (20, [1, 256, 16, 16]),
+    (21, [1, 512, 8, 8]),
+    (22, [1, 512, 8, 8]),
+    (23, [1, 512, 8, 8]),
+    (24, [1, 512, 8, 8]),
+    (25, [1, 512, 8, 8]),
+    (26, [1, 512, 8, 8]),
+    (27, [1, 512, 1, 1]),
+    (28, [1, 1000, 1, 1]),
+    (29, [1, 1000, 1, 1])
   ]

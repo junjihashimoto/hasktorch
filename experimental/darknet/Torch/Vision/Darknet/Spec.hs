@@ -13,6 +13,8 @@ data LayerSpec
   = LConvolutionSpec ConvolutionSpec
   | LConvolutionWithBatchNormSpec ConvolutionWithBatchNormSpec
   | LMaxPoolSpec MaxPoolSpec
+  | LAvgPoolSpec AvgPoolSpec
+  | LSoftMaxSpec SoftMaxSpec
   | LUpSampleSpec UpSampleSpec
   | LRouteSpec RouteSpec
   | LShortCutSpec ShortCutSpec
@@ -37,6 +39,12 @@ data ConvolutionWithBatchNormSpec = ConvolutionWithBatchNormSpec
   }
   deriving (Show, Eq)
 
+data AvgPoolSpec = AvgPoolSpec
+  deriving (Show, Eq)
+
+data SoftMaxSpec = SoftMaxSpec
+  deriving (Show, Eq)
+
 data MaxPoolSpec = MaxPoolSpec
   { input_filters :: Int,
     layer_size :: Int,
@@ -52,7 +60,8 @@ data RouteSpec = RouteSpec
 
 data ShortCutSpec = ShortCutSpec
   { input_filters :: Int,
-    from :: Int
+    from :: Int,
+    activation :: String
   }
   deriving (Show, Eq)
 
@@ -79,6 +88,8 @@ toDarknetSpec (C.DarknetConfig global layer_configs) = do
               then pure $ (idx, (LConvolutionWithBatchNormSpec $ ConvolutionWithBatchNormSpec {..}))
               else pure $ (idx, (LConvolutionSpec $ ConvolutionSpec {..}))
           C.MaxPool {..} -> pure $ (idx, (LMaxPoolSpec $ MaxPoolSpec {..}))
+          C.AvgPool -> pure $ (idx, (LAvgPoolSpec $ AvgPoolSpec))
+          C.SoftMax -> pure $ (idx, (LSoftMaxSpec $ SoftMaxSpec))
           C.UpSample {..} -> pure $ (idx, (LUpSampleSpec $ UpSampleSpec {upsampleInputFilters = input_filters, upsampleStride = stride}))
           C.Route {..} ->
             pure $
@@ -96,7 +107,8 @@ toDarknetSpec (C.DarknetConfig global layer_configs) = do
                 ( LShortCutSpec $
                     ShortCutSpec
                       { input_filters = input_filters,
-                        from = if from < 0 then idx + from else from
+                        from = if from < 0 then idx + from else from,
+                        activation = activation
                       }
                 )
               )

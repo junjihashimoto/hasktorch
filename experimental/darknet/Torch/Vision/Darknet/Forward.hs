@@ -16,7 +16,7 @@ import qualified Data.ByteString as BS
 import Data.List ((!!))
 import Data.Map (Map, empty, insert)
 import qualified Data.Map as M
-import Data.Maybe (isJust)
+import Data.Maybe (catMaybes, isJust)
 import Debug.Trace
 import GHC.Exts
 import GHC.Generics
@@ -31,7 +31,6 @@ import Torch.Tensor as D
 import Torch.TensorFactories
 import Torch.Typed.NN (HasForward (..))
 import qualified Torch.Vision.Darknet.Spec as S
-
 
 type Index = Int
 
@@ -120,11 +119,35 @@ instance HasForward MaxPool Tensor Tensor where
   forward MaxPool {..} input =
     let pad = (layerSize - 1) `div` 2
         out = D.maxPool2d (layerSize, layerSize) (stride, stride) (pad, pad) (1, 1) D.Floor input
-        [n,f,h,w] = shape out
-        padx = D.cat (D.Dim (-1)) [out, zeros' [n,f,h,1]]
-        pady = D.cat (D.Dim (2)) [padx, zeros' [n,f,1,w+1]]
-        out' = if layerSize == 2 && stride ==1 then pady  else out
+        [n, f, h, w] = shape out
+        padx = D.cat (D.Dim (-1)) [out, zeros' [n, f, h, 1]]
+        pady = D.cat (D.Dim (2)) [padx, zeros' [n, f, 1, w + 1]]
+        out' = if layerSize == 2 && stride == 1 then pady else out
      in out'
+  forwardStoch f a = pure $ forward f a
+
+data AvgPool = AvgPool
+  deriving (Show, Generic, Parameterized)
+
+instance Randomizable S.AvgPoolSpec AvgPool where
+  sample S.AvgPoolSpec = pure AvgPool
+
+instance HasForward AvgPool Tensor Tensor where
+  forward AvgPool input =
+    let out = D.adaptiveAvgPool2d (1, 1) input
+     in out
+  forwardStoch f a = pure $ forward f a
+
+data SoftMax = SoftMax
+  deriving (Show, Generic, Parameterized)
+
+instance Randomizable S.SoftMaxSpec SoftMax where
+  sample S.SoftMaxSpec = pure SoftMax
+
+instance HasForward SoftMax Tensor Tensor where
+  forward SoftMax input =
+    let out = D.softmax (D.Dim 1) input
+     in out
   forwardStoch f a = pure $ forward f a
 
 data Route = Route
@@ -143,7 +166,8 @@ instance HasForward Route (Map Int Tensor) Tensor where
   forwardStoch f a = pure $ forward f a
 
 data ShortCut = ShortCut
-  { from :: Int
+  { from :: Int,
+    isLeaky :: Bool
   }
   deriving (Show, Generic, Parameterized)
 
@@ -151,9 +175,32 @@ instance Randomizable S.ShortCutSpec ShortCut where
   sample S.ShortCutSpec {..} = do
     ShortCut
       <$> pure from
+      <*> pure (activation == "leaky")
 
 instance HasForward ShortCut (Tensor, Map Int Tensor) Tensor where
-  forward ShortCut {..} (input, inputs) = input + (inputs M.! from)
+  forward ShortCut {..} (input, inputs) =
+    let [b0, c0, x0, y0] = D.shape input
+        shortcut = inputs M.! from
+        [b1, c1, x1, y1] = D.shape shortcut
+        stride = if x1 < x0 then 1 else x1 `div` x0
+        sample = if x0 < x1 then 1 else x0 `div` x1
+        zero2d :: Int -> [[Float]]
+        zero2d n = replicate n $ replicate n 0
+        one2d :: Int -> [[Float]]
+        one2d n = (1 : replicate (n -1) 0) : (replicate (n -1) $ replicate n 0)
+        weight :: [[[[Float]]]]
+        weight = do
+          o <- [0 .. (c0 -1)]
+          return $ do
+            i <- [0 .. (c1 -1)]
+            if o == i
+              then return $ one2d stride
+              else return $ zero2d stride
+        activation = if isLeaky then flip I.leaky_relu 0.1 else id
+     in -- trace (show (D.shape input) ++ show (D.shape shortcut) ++"\n") $
+        if c0 == c1 && x0 == x1 && y0 == y1
+          then activation $ input + shortcut
+          else activation $ input + D.conv2d' (asTensor weight) (zeros' [c0]) (stride, stride) (0, 0) shortcut
   forwardStoch f a = pure $ forward f a
 
 type Anchors = [(Float, Float)]
@@ -320,86 +367,94 @@ data Target = Target
   }
 
 toBuildTargets ::
-  (Tensor,Tensor,Tensor,Tensor) ->
+  (Tensor, Tensor, Tensor, Tensor) ->
   Tensor ->
   Tensor ->
   Anchors ->
   Float ->
   Target
-toBuildTargets (pred_boxes_x,
-                pred_boxes_y,
-                pred_boxes_w,
-                pred_boxes_h)
-                pred_cls target anchors ignore_thres =
-  let nB = D.size 0 pred_boxes_x
-      nA = D.size 1 pred_boxes_x
-      nC = D.size (-1) pred_cls
-      nG = D.size 2 pred_boxes_x
-      obj_mask_init = zeros [nB, nA, nG, nG] bool_opts
-      noobj_mask_init = ones [nB, nA, nG, nG] bool_opts
-      class_mask_init = zeros' [nB, nA, nG, nG]
-      iou_scores_init = zeros' [nB, nA, nG, nG]
-      tx_init = zeros' [nB, nA, nG, nG]
-      ty_init = zeros' [nB, nA, nG, nG]
-      tcls_init = zeros' [nB, nA, nG, nG, nC]
-      target_boxes = nG `D.mulScalar` (D.slice (-1) 2 6 1 target)
-      gx = squeezeLastDim $ D.slice (-1) 0 1 1 target_boxes
-      gy = squeezeLastDim $ D.slice (-1) 1 2 1 target_boxes
-      gw = squeezeLastDim $ D.slice (-1) 2 3 1 target_boxes
-      gh = squeezeLastDim $ D.slice (-1) 3 4 1 target_boxes
-      gi = toType D.Int64 gx
-      gj = toType D.Int64 gy
-      -- (anchors,batch)
-      ious_list = map (\anchor -> bboxWhIou anchor (gw, gh)) anchors
-      ious = D.transpose (D.Dim 0) (D.Dim 1) $  D.stack (D.Dim 0) ious_list
-      (best_ious, best_n) = I.maxDim ious 0 False
-      best_n_anchor = anchors !! (asValue best_n :: Int)
-      b = toType D.Int64 $ squeezeLastDim $ D.slice (-1) 0 1 1 target
-      target_labels = toType D.Int64 $ squeezeLastDim $ D.slice (-1) 1 2 1 target
-      obj_mask =
-        maskedFill
-          obj_mask_init
-          (b, best_n, gj, gi)
-          True
-      noobj_mask' =
-        maskedFill
-          noobj_mask_init
-          (b, best_n, gj, gi)
-          False
-      noobj_mask =
-        foldl ( \v i ->
+toBuildTargets
+  ( pred_boxes_x,
+    pred_boxes_y,
+    pred_boxes_w,
+    pred_boxes_h
+    )
+  pred_cls
+  target
+  anchors
+  ignore_thres =
+    let nB = D.size 0 pred_boxes_x
+        nA = D.size 1 pred_boxes_x
+        nC = D.size (-1) pred_cls
+        nG = D.size 2 pred_boxes_x
+        obj_mask_init = zeros [nB, nA, nG, nG] bool_opts
+        noobj_mask_init = ones [nB, nA, nG, nG] bool_opts
+        class_mask_init = zeros' [nB, nA, nG, nG]
+        iou_scores_init = zeros' [nB, nA, nG, nG]
+        tx_init = zeros' [nB, nA, nG, nG]
+        ty_init = zeros' [nB, nA, nG, nG]
+        tcls_init = zeros' [nB, nA, nG, nG, nC]
+        target_boxes = nG `D.mulScalar` (D.slice (-1) 2 6 1 target)
+        gx = squeezeLastDim $ D.slice (-1) 0 1 1 target_boxes
+        gy = squeezeLastDim $ D.slice (-1) 1 2 1 target_boxes
+        gw = squeezeLastDim $ D.slice (-1) 2 3 1 target_boxes
+        gh = squeezeLastDim $ D.slice (-1) 3 4 1 target_boxes
+        gi = toType D.Int64 gx
+        gj = toType D.Int64 gy
+        -- (anchors,batch)
+        ious_list = map (\anchor -> bboxWhIou anchor (gw, gh)) anchors
+        ious = D.transpose (D.Dim 0) (D.Dim 1) $ D.stack (D.Dim 0) ious_list
+        (best_ious, best_n) = I.maxDim ious 0 False
+        best_n_anchor = anchors !! (asValue best_n :: Int)
+        b = toType D.Int64 $ squeezeLastDim $ D.slice (-1) 0 1 1 target
+        target_labels = toType D.Int64 $ squeezeLastDim $ D.slice (-1) 1 2 1 target
+        obj_mask =
           maskedFill
-            v
-            (b ! i, (ious `D.gt` (asTensor ignore_thres)) ! 0, gj ! i, gi ! i)
+            obj_mask_init
+            (b, best_n, gj, gi)
+            True
+        noobj_mask' =
+          maskedFill
+            noobj_mask_init
+            (b, best_n, gj, gi)
             False
-          ) noobj_mask' [0..((D.size 0 gj)-1)]
-      tx =
-        maskedFill
-          (zeros' [nB, nA, nG, nG])
-          (b, best_n, gj, gi)
-          (gx - D.floor gx)
-      ty =
-        maskedFill
-          (zeros' [nB, nA, nG, nG])
-          (b, best_n, gj, gi)
-          (gy - D.floor gy)
-      tw =
-        maskedFill
-          (zeros' [nB, nA, nG, nG])
-          (b, best_n, gj, gi)
-          (I.log (gw / (asTensor (fst best_n_anchor)) + 1e-16))
-      th =
-        maskedFill
-          (zeros' [nB, nA, nG, nG])
-          (b, best_n, gj, gi)
-          (I.log (gh / (asTensor (snd best_n_anchor)) + 1e-16))
-      tcls =
-        maskedFill
-          tcls_init
-          (b, best_n, gj, gi, target_labels)
-          (1 :: Float)
-      tconf = toType D.Float obj_mask
-   in Target {..}
+        noobj_mask =
+          foldl
+            ( \v i ->
+                maskedFill
+                  v
+                  (b ! i, (ious `D.gt` (asTensor ignore_thres)) ! 0, gj ! i, gi ! i)
+                  False
+            )
+            noobj_mask'
+            [0 .. ((D.size 0 gj) -1)]
+        tx =
+          maskedFill
+            (zeros' [nB, nA, nG, nG])
+            (b, best_n, gj, gi)
+            (gx - D.floor gx)
+        ty =
+          maskedFill
+            (zeros' [nB, nA, nG, nG])
+            (b, best_n, gj, gi)
+            (gy - D.floor gy)
+        tw =
+          maskedFill
+            (zeros' [nB, nA, nG, nG])
+            (b, best_n, gj, gi)
+            (I.log (gw / (asTensor (fst best_n_anchor)) + 1e-16))
+        th =
+          maskedFill
+            (zeros' [nB, nA, nG, nG])
+            (b, best_n, gj, gi)
+            (I.log (gh / (asTensor (snd best_n_anchor)) + 1e-16))
+        tcls =
+          maskedFill
+            tcls_init
+            (b, best_n, gj, gi, target_labels)
+            (1 :: Float)
+        tconf = toType D.Float obj_mask
+     in Target {..}
 
 index :: TensorLike a => Tensor -> [a] -> Tensor
 index org idx = I.index org (map asTensor idx)
@@ -472,6 +527,8 @@ data Layer
   = LConvolution Convolution
   | LConvolutionWithBatchNorm ConvolutionWithBatchNorm
   | LMaxPool MaxPool
+  | LAvgPool AvgPool
+  | LSoftMax SoftMax
   | LUpSample UpSample
   | LRoute Route
   | LShortCut ShortCut
@@ -512,6 +569,8 @@ instance Randomizable S.DarknetSpec Darknet where
         S.LConvolutionSpec s -> (\s -> (idx, (LConvolution s))) <$> sample s
         S.LConvolutionWithBatchNormSpec s -> (\s -> (idx, (LConvolutionWithBatchNorm s))) <$> sample s
         S.LMaxPoolSpec s -> (\s -> (idx, (LMaxPool s))) <$> sample s
+        S.LAvgPoolSpec s -> (\s -> (idx, (LAvgPool s))) <$> sample s
+        S.LSoftMaxSpec s -> (\s -> (idx, (LSoftMax s))) <$> sample s
         S.LUpSampleSpec s -> (\s -> (idx, (LUpSample s))) <$> sample s
         S.LRouteSpec s -> (\s -> (idx, (LRoute s))) <$> sample s
         S.LShortCutSpec s -> (\s -> (idx, (LShortCut s))) <$> sample s
@@ -529,7 +588,8 @@ forwardDarknet' depth (Darknet layers) (train, input) = loop depth layers empty 
     loop n [] maps tensors = (maps, D.cat (D.Dim 1) (reverse tensors))
     loop n ((idx, layer) : next) layerOutputs yoloOutputs =
       let input' = (if idx == 0 then input else layerOutputs M.! (idx -1))
-       in case layer of
+       in --       in case (trace (show idx ++ "\n" ++ show (D.shape input') ++ "\n") layer) of
+          case layer of
             LConvolution s ->
               let out = forward s input'
                in loop (n -1) next (insert idx out layerOutputs) yoloOutputs
@@ -539,6 +599,12 @@ forwardDarknet' depth (Darknet layers) (train, input) = loop depth layers empty 
             LMaxPool s ->
               let out = forward s input'
                in loop (n -1) next (insert idx out layerOutputs) yoloOutputs
+            LAvgPool s ->
+              let out = forward s input'
+               in loop (n -1) next (insert idx out layerOutputs) yoloOutputs
+            LSoftMax s ->
+              let out = forward s input'
+               in loop (n -1) next (insert idx out layerOutputs) (out : yoloOutputs)
             LUpSample s ->
               let out = forward s input'
                in loop (n -1) next (insert idx out layerOutputs) yoloOutputs
@@ -590,19 +656,19 @@ toDetection ::
   Tensor
 toDetection prediction conf_thres =
   let indexes = ((prediction ! (Ellipsis, 4)) `D.ge` asTensor conf_thres)
-      prediction' = trace (show (D.shape prediction)) $ xywh2xyxy $ prediction ! indexes
+      prediction' = xywh2xyxy $ prediction ! indexes
       n = (reverse $ D.shape prediction) !! 1
-      ids = (D.reshape [1,n] $ (arange' (0 :: Int) n (1 :: Int))) ! indexes
+      ids = (D.reshape [1, n] $ (arange' (0 :: Int) n (1 :: Int))) ! indexes
       offset_class = 5
       (values, indices) = D.maxDim (D.Dim (-1)) D.RemoveDim (prediction' ! (Ellipsis, Slice (offset_class, None)))
       list_of_detections =
         [ prediction' ! (Ellipsis, Slice (0, 5)),
           D.stack
-          (D.Dim (-1))
-          [ values,
-            indices,
-            ids
-          ]
+            (D.Dim (-1))
+            [ values,
+              indices,
+              ids
+            ]
         ]
       detections = D.cat (D.Dim (-1)) list_of_detections
       score = prediction' ! (Ellipsis, 4) * values
@@ -637,7 +703,12 @@ nonMaxSuppression prediction conf_thres nms_thres = loop org_detections
 
 updateDarknet :: Darknet -> (Int -> Layer -> IO Layer) -> IO Darknet
 updateDarknet (Darknet darknet) func = do
-  v <- forM darknet $ \(i,layer) -> do
+  v <- forM darknet $ \(i, layer) -> do
     vv <- func i layer
-    return (i,vv)
+    return (i, vv)
   return $ Darknet v
+
+getTensorFromDarknet :: Darknet -> (Int -> Layer -> IO (Maybe Tensor)) -> IO [Tensor]
+getTensorFromDarknet (Darknet darknet) func = do
+  v <- forM darknet $ \(i, layer) -> func i layer
+  return $ catMaybes v

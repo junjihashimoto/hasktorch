@@ -47,7 +47,8 @@ outputChannels cfg@(DarknetConfig' global layer_configs) idx =
             )
             0
             layers
-        ShortCut {..} -> outputChannels cfg (positive_idx from)
+        --        ShortCut {..} -> outputChannels cfg (positive_idx from)
+        ShortCut {..} -> outputChannels cfg (positive_idx (-1))
         _ -> inputChannels cfg idx
   where
     positive_idx idx' = if idx' >= 0 then idx' else idx' + idx
@@ -81,6 +82,8 @@ data LayerConfig
       { layer_size :: Int,
         stride :: Int
       }
+  | AvgPool
+  | SoftMax
   | UpSample
       { stride :: Int
       }
@@ -88,7 +91,8 @@ data LayerConfig
       { layers :: [Int]
       }
   | ShortCut
-      { from :: Int
+      { from :: Int,
+        activation :: String
       }
   | Yolo
       { mask :: [Int],
@@ -130,6 +134,8 @@ configParser' = (toList <$>) $
           MaxPool
             <$> fieldOf "size" number
             <*> fieldOf "stride" number
+      "avgpool" -> pure $ Right AvgPool
+      "softmax" -> pure $ Right SoftMax
       "upsample" ->
         (Right <$>) $
           UpSample
@@ -142,6 +148,7 @@ configParser' = (toList <$>) $
         (Right <$>) $
           ShortCut
             <$> fieldOf "from" number
+            <*> fieldOf "activation" string
       "yolo" ->
         (Right <$>) $
           Yolo

@@ -57,7 +57,45 @@ executable yolov3
                      , darknet
                      , JuicyPixels
                      , safe-exceptions
+                     , containers
                      
+executable darknet-cli
+  import:              config
+  hs-source-dirs:      darknet-cli
+  main-is:             Main.hs
+  ghc-options:         -fno-warn-partial-type-signatures -rtsopts
+  build-depends:       bytestring >= 0.10.8
+                     , darknet
+                     , JuicyPixels
+                     , safe-exceptions
+                     , containers
+
+executable smoothgrad
+  import:              config
+  hs-source-dirs:      smoothgrad
+  main-is:             Main.hs
+  ghc-options:         -fno-warn-partial-type-signatures -rtsopts
+  build-depends:       bytestring >= 0.10.8
+                     , darknet
+                     , JuicyPixels
+                     , safe-exceptions
+                     , containers
+                     , inline-c-cpp
+                     , unix
+
+executable resnet_torchscript
+  import:              config
+  hs-source-dirs:      resnet_torchscript
+  main-is:             Main.hs
+  ghc-options:         -fno-warn-partial-type-signatures -rtsopts
+  build-depends:       bytestring >= 0.10.8
+                     , darknet
+                     , JuicyPixels
+                     , safe-exceptions
+                     , containers
+                     , inline-c-cpp
+                     , unix
+
 executable bounding-box
   import:              config
   hs-source-dirs:      bounding-box
