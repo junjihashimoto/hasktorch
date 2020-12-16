@@ -22,20 +22,6 @@ deNormalize input = clamp 0 1 $ (input * std) + mean
     mean = asTensor [0.485, 0.456, 0.406]
     std = asTensor [0.229, 0.224, 0.225]
 
-smoothGrad :: Int -> Float -> (Tensor -> Tensor) -> Tensor -> IO Tensor
-smoothGrad num_samples standard_deviation func input_image = do
-  v <- foldM loop init [1..num_samples]
-  return $ (1.0 / fromIntegral num_samples) `mulScalar` v 
-  where
-    image_shape = shape input_image
-    init = zeros' image_shape
-    loop sum' _ = do
-      r <- randnIO' image_shape
-      input <- makeIndependent $ input_image + (standard_deviation `mulScalar` r)
-      let loss = func $ toDependent input
-          (g:_) = grad loss [input]
-      return $ sum' + Torch.abs g
-
 main :: IO ()
 main = do
   let opt = \case

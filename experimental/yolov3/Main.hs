@@ -116,21 +116,6 @@ id2layer i =
     layer1 = 26 * 26 * 3
     layer2 = 52 * 52 * 3
 
-smoothGrad :: Int -> Float -> (Tensor -> Tensor) -> Tensor -> IO Tensor
-smoothGrad num_samples standard_deviation func input_image = do
-  v <- foldM loop init [1..num_samples]
-  return $ (1.0 / fromIntegral num_samples) `mulScalar` v 
-  where
-    image_shape = shape input_image
-    init = zeros' image_shape
-    loop sum' _ = do
-      r <- randnIO' image_shape
-      input <- makeIndependent $ input_image + (standard_deviation `mulScalar` r)
-      let loss = func $ toDependent input
-          (g:_) = grad loss [input]
-      return $ sum' + Torch.abs g
-
-
 main = do
   args <- getArgs
   when (length args /= 4) $ do
@@ -168,10 +153,10 @@ main = do
   readImageAsRGB8WithScaling input_file 416 416 True >>= \case
     Right (input_image, input_tensor) -> do
       let input_data' = divScalar (255 :: Float) (hwc2chw $ toType Float input_tensor)
-          (outs,out) = forwardDarknet net'' (Nothing, input_data')
+          (outs,out) = forwardDarknet net' (Nothing, input_data')
           outputs = nonMaxSuppression out 0.8 0.4
           func input =
-            let (outs,_) = forwardDarknet net'' (Nothing, input)
+            let (outs,_) = forwardDarknet net' (Nothing, input)
             in (outs M.! 92) ! (0,153,11,13)
       print "--"
       print $ shape $ (outs M.! 92)

@@ -41,12 +41,15 @@ import qualified Torch.Functional as D
 import Torch.Internal.Cast
 import qualified Torch.Internal.Managed.TensorFactories as LibTorch
 import Torch.NN
+import Torch.Autograd
+import Torch.TensorFactories (randnIO', zeros')
 import Torch.Tensor
 import qualified Torch.Tensor as D
 import qualified Torch.TensorOptions as D
 import qualified Torch.Typed.Vision as I
 import Prelude hiding (max, min)
 import qualified Prelude as P
+import Control.Monad (foldM)
 
 C.include "<stdint.h>"
 
@@ -644,3 +647,17 @@ chw2hwc = D.permute [0, 2, 3, 1]
 
 randomIndexes :: Int -> [Int]
 randomIndexes size = (`mod` size) <$> randoms seed where seed = mkStdGen 123
+
+smoothGrad :: Int -> Float -> (Tensor -> Tensor) -> Tensor -> IO Tensor
+smoothGrad num_samples standard_deviation func input_image = do
+  v <- foldM loop init [1..num_samples]
+  return $ (1.0 / fromIntegral num_samples :: Float) `mulScalar` v 
+  where
+    image_shape = shape input_image
+    init = zeros' image_shape
+    loop sum' _ = do
+      r <- randnIO' image_shape
+      input <- makeIndependent $ input_image + (standard_deviation `mulScalar` r)
+      let loss = func $ toDependent input
+          (g:_) = grad loss [input]
+      return $ sum' + D.abs g
