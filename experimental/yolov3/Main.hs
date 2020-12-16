@@ -124,6 +124,9 @@ main = do
       weight_file = args !! 1
       input_file = args !! 2
       output_file = args !! 3
+      device = Device CUDA 0
+      toDev = toDevice device
+      toHost = toDevice (Device CPU 0)
     
   mconfig <- readIniFile config_file
   spec <- case mconfig of
@@ -149,6 +152,7 @@ main = do
           return $ LConvolution c{conv2d =c'}
         else return layer
       _ -> return layer
+--  let net''' = toDevice device net''
   
   readImageAsRGB8WithScaling input_file 416 416 True >>= \case
     Right (input_image, input_tensor) -> do

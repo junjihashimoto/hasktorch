@@ -31,6 +31,7 @@ main = do
   [modelfile,inputfile] <- opt <$> getArgs
 -- model <- load WithoutRequiredGrad modelfile
   model <- load WithRequiredGrad modelfile
+  
   mimg <- readImageAsRGB8WithScaling inputfile 256 256 True
   case mimg of
     Left err  -> print err
@@ -40,7 +41,9 @@ main = do
           -- [[r,g,b]] = asValue img'' :: [[[[Float]]]]
       let func model input =
             let IVTensor v' = Torch.Script.forward model [IVTensor input]
-            in sumAll (argmax (Dim 1) RemoveDim $ softmax (Dim 1) v')
+                rate = softmax (Dim 0) $ squeezeAll v'
+                idx = argmax (Dim 0) RemoveDim $ rate
+            in rate ! idx
       print "hello"
       print $ shape $ func model img''
       img <- smoothGrad 10 0.2 (func model) img''
@@ -58,7 +61,7 @@ main = do
           print idxs
           print scores
           print $ map (labels !!) $ idxs !! 0
-          writePng "o.png" $ toType UInt8 $ mulScalar (255.0::Float) $ clamp 0 1 $ chw2hwc img
+          writePng "o.png" $ toType UInt8 $ mulScalar (255.0 * 100::Float) $ clamp 0 1 $ chw2hwc img
           
         _ -> print "Return value is not tensor."
 
