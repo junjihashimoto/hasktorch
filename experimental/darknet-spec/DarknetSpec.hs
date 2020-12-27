@@ -4,7 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
-module Main (spec, main) where
+module DarknetSpec (spec, main) where
 
 import Control.Exception.Safe
 import Control.Monad.State.Strict

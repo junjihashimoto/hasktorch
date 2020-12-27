@@ -834,12 +834,12 @@ squeezeAll t = unsafePerformIO $ cast1 ATen.squeeze_t t
 -- | squeezeDim
 squeezeDim ::
   -- | dim
-  Int ->
+  Dim ->
   -- | input
   Tensor ->
   -- | output
   Tensor
-squeezeDim dim t = unsafePerformIO $ cast2 ATen.squeeze_tl t dim
+squeezeDim (Dim dim) t = unsafePerformIO $ cast2 ATen.squeeze_tl t dim
 
 --
 -- Cumulative operations
@@ -848,48 +848,48 @@ squeezeDim dim t = unsafePerformIO $ cast2 ATen.squeeze_tl t dim
 -- | Returns a tuple (values, indices) where values is the cumulative maximum of elements of input in the dimension dim. And indices is the index location of each maximum value found in the dimension dim.
 cummax ::
   -- | dim
-  Int ->
+  Dim ->
   -- | input
   Tensor ->
   -- | output (values, indices)
   (Tensor, Tensor)
-cummax _dim _self = unsafePerformIO $ cast2 ATen.cummax_tl _self _dim
+cummax (Dim _dim) _self = unsafePerformIO $ cast2 ATen.cummax_tl _self _dim
 
 -- | Returns a tuple (values, indices) where values is the cumulative minimum of elements of input in the dimension dim. And indices is the index location of each maximum value found in the dimension dim.
 cummin ::
   -- | dim
-  Int ->
+  Dim ->
   -- | input
   Tensor ->
   -- | output (values, indices)
   (Tensor, Tensor)
-cummin _dim _self = unsafePerformIO $ cast2 ATen.cummin_tl _self _dim
+cummin (Dim _dim) _self = unsafePerformIO $ cast2 ATen.cummin_tl _self _dim
 
 -- | Returns the cumulative product of elements of input in the dimension dim.
 -- For example, if input is a vector of size N, the result will also be a vector of size N, with elements.
 cumprod ::
   -- | dim
-  Int ->
+  Dim ->
   -- | dtype
   DType ->
   -- | input
   Tensor ->
   -- | output
   Tensor
-cumprod _dim _dtype _self = unsafePerformIO $ cast3 ATen.cumprod_tls _self _dim _dtype
+cumprod (Dim _dim) _dtype _self = unsafePerformIO $ cast3 ATen.cumprod_tls _self _dim _dtype
 
 -- | Returns the cumulative sum of elements of input in the dimension dim.
 -- For example, if input is a vector of size N, the result will also be a vector of size N, with elements.
 cumsum ::
   -- | dim
-  Int ->
+  Dim ->
   -- | dtype
   DType ->
   -- | input
   Tensor ->
   -- | output
   Tensor
-cumsum _dim _dtype _self = unsafePerformIO $ cast3 ATen.cumsum_tls _self _dim _dtype
+cumsum (Dim _dim) _dtype _self = unsafePerformIO $ cast3 ATen.cumsum_tls _self _dim _dtype
 
 --
 -- Loss Functions
@@ -956,7 +956,7 @@ nllLoss' ::
 nllLoss' target t = unsafePerformIO $ cast5 ATen.nll_loss_tttll t target weight ReduceMean (-100 :: Int)
   where
     nClass = shape t !! 1 -- TODO: nicer runtime error if input dimensions don't conform
-    weight = toDevice (device target) $ ones' [nClass]
+    weight = _toDevice (device target) $ ones' [nClass]
 
 -- | Returns cosine similarity between x1 and x2, computed along dim.
 cosineSimilarity ::
@@ -2606,7 +2606,7 @@ trunc input = unsafePerformIO $ cast1 ATen.trunc_t input
 -- | Returns the unique elements of the input tensor along a dimension.
 uniqueDim ::
   -- | dim
-  Int ->
+  Dim ->
   -- | sorted
   Bool ->
   -- | return_inverse
@@ -2617,7 +2617,7 @@ uniqueDim ::
   Tensor ->
   -- | output
   (Tensor, Tensor, Tensor)
-uniqueDim dim sorted returnInverse returnCounts self = unsafePerformIO $ cast5 ATen.unique_dim_tlbbb self dim sorted returnInverse returnCounts
+uniqueDim (Dim dim) sorted returnInverse returnCounts self = unsafePerformIO $ cast5 ATen.unique_dim_tlbbb self dim sorted returnInverse returnCounts
 
 -- | Eliminates all but the first element from every consecutive group of equivalent elements.
 -- This function is different from uniqueDim in the sense that this function only eliminates consecutive duplicate values.
@@ -2627,18 +2627,18 @@ uniqueConsecutive ::
   -- | return_counts
   Bool ->
   -- | dim
-  Int ->
+  Dim ->
   -- | input
   Tensor ->
   -- | output
   (Tensor, Tensor, Tensor)
-uniqueConsecutive returnInverse returnCounts dim self = unsafePerformIO $ cast4 ATen.unique_consecutive_tbbl self returnInverse returnCounts dim
+uniqueConsecutive returnInverse returnCounts (Dim dim) self = unsafePerformIO $ cast4 ATen.unique_consecutive_tbbl self returnInverse returnCounts dim
 
 -- | Eliminates all but the first element from every consecutive group of equivalent elements along a dimension.
 -- This function is different from uniqueDim in the sense that this function only eliminates consecutive duplicate values.
 uniqueDimConsecutive ::
   -- | dim
-  Int ->
+  Dim ->
   -- | return_inverse
   Bool ->
   -- | return_counts
@@ -2647,7 +2647,7 @@ uniqueDimConsecutive ::
   Tensor ->
   -- | output
   (Tensor, Tensor, Tensor)
-uniqueDimConsecutive dim returnInverse returnCounts self = unsafePerformIO $ cast4 ATen.unique_dim_consecutive_tlbb self dim returnInverse returnCounts
+uniqueDimConsecutive (Dim dim) returnInverse returnCounts self = unsafePerformIO $ cast4 ATen.unique_dim_consecutive_tlbb self dim returnInverse returnCounts
 
 -- | Returns a new tensor with a dimension of size one inserted at the specified position.
 -- The returned tensor shares the same underlying data with this tensor.
@@ -2918,3 +2918,14 @@ batchNorm weight bias running_mean running_var training momentum eps input =
       momentum
       eps
       True
+
+data Order = Desc | Asc deriving (Eq, Show)
+
+argsort
+  :: Dim -- ^ dim
+  -> Order -- ^ order
+  -> Tensor -- ^ input
+  -> Tensor
+argsort (Dim _dim) order _self = unsafePerformIO $ (cast3 ATen.argsort_tlb) _self _dim _descending
+  where
+    _descending = order == Desc

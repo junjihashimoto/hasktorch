@@ -138,9 +138,6 @@ toType dtype t = unsafePerformIO $ cast2 ATen.tensor_toType_s t dtype
 class ToDevice a where
   toDevice :: Device -> a -> a
 
-instance ToDevice Tensor where
-  toDevice = _toDevice
-
 -- | Casts the input tensor to given device
 _toDevice ::
   -- | device to cast input to

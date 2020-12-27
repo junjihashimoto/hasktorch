@@ -125,8 +125,8 @@ main = do
       input_file = args !! 2
       output_file = args !! 3
       device = Device CUDA 0
-      toDev = toDevice device
-      toHost = toDevice (Device CPU 0)
+      toDev = _toDevice device
+      toHost = _toDevice (Device CPU 0)
     
   mconfig <- readIniFile config_file
   spec <- case mconfig of
