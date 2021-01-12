@@ -291,7 +291,6 @@ instance Parameterized ScriptModule where
     let len = length (getParameters module')
     ps' <- replicateM len nextParameter
     return $ updateParameters WithRequiredGrad module' (map toDependent ps')
-  replaceDevice = defaultReplaceDevice
 
 trace ::
   -- | moduleName

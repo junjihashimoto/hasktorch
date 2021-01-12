@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Torch.Autograd where
 
@@ -12,6 +14,7 @@ import qualified Torch.Internal.Managed.Autograd
 import qualified Torch.Internal.Managed.Type.Tensor as ATen
 import qualified Torch.Internal.Type as ATen
 import Torch.Tensor
+import GHC.Generics
 
 -- | Note: to create an `IndependentTensor` use `makeIndependent`;
 -- | otherwise, Torch will complain the parameter does not require a gradient.
@@ -19,7 +22,7 @@ newtype IndependentTensor
   = IndependentTensor
       { toDependent :: Tensor
       }
-  deriving (Show)
+  deriving (Show, Generic)
 
 grad :: Tensor -> [IndependentTensor] -> [Tensor]
 grad y inputs = unsafePerformIO $ cast2 Torch.Internal.Managed.Autograd.grad y (map toDependent inputs)

@@ -87,6 +87,7 @@ library
                     , Torch.Data.Internal
                     , Torch.Data.Dataset
                     , Torch.Data.CsvDatastream
+                    , Torch.Lens
 
  other-modules:       Paths_hasktorch
  hs-source-dirs:      src
@@ -127,6 +128,8 @@ library
                     , containers
                     , inline-c
                     , vector-sized
+                    , generic-lens
+                    , generic-lens-core
 
  default-extensions:  Strict
                     , StrictData

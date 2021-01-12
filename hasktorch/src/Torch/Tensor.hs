@@ -1,6 +1,8 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -46,11 +48,26 @@ import qualified Torch.Internal.Managed.Type.TensorOptions as ATen
 import qualified Torch.Internal.Type as ATen
 import qualified Torch.Internal.Unmanaged.Type.Tensor as Unmanaged (tensor_data_ptr)
 import Torch.TensorOptions
+import Torch.Lens
+import GHC.Generics
+import Data.Kind
+import Data.Generics.Product.Internal.Types
 
 type ATenTensor = ForeignPtr ATen.Tensor
 
 -- do not use the constructor
-newtype Tensor = Unsafe ATenTensor
+newtype Tensor = Unsafe ATenTensor deriving Generic
+
+-- instance {-# OVERLAPS #-} HasTypes s Tensor
+
+-- data Custom
+--type instance Children TorchGeneric a = ChildrenTorch a
+
+--type family ChildrenTorch (a :: Type) where
+--  ChildrenTorch Tensor        = '[]
+--  ChildrenTorch a = Children ChGeneric a
+--instance HasTypesCustom Custom a a Tensor Tensor where
+--  typesCustom   
 
 instance Castable Tensor ATenTensor where
   cast (Unsafe aten_tensor) f = f aten_tensor
@@ -126,20 +143,21 @@ toInt :: Tensor -> Int
 toInt t = unsafePerformIO $ cast1 ATen.tensor_item_int64_t t
 
 -- | Casts the input tensor to the given data type
-toType ::
+_toType ::
   -- | data type to cast input to
   DType ->
   -- | input
   Tensor ->
   -- | output
   Tensor
-toType dtype t = unsafePerformIO $ cast2 ATen.tensor_toType_s t dtype
+_toType dtype t = unsafePerformIO $ cast2 ATen.tensor_toType_s t dtype
 
-class ToDevice a where
-  toDevice :: Device -> a -> a
+toType :: HasTypes a Tensor => DType -> a -> a
+toType dtype = gmap (types @Tensor) (_toType dtype)
 
-instance ToDevice Tensor where
-  toDevice = _toDevice
+toDevice :: HasTypes a Tensor => Device -> a -> a
+toDevice device = gmap (types @Tensor) (_toDevice device)
+
 
 -- | Casts the input tensor to given device
 _toDevice ::
