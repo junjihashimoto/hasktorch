@@ -1,9 +1,6 @@
 name: nix-linux-rocm
 
-on:
-  push:
-    branches:
-      - master
+on: [push, pull_request]
 
 jobs:
   # tests:
