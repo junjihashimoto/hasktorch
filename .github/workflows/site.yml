@@ -1,0 +1,146 @@
+name: site
+
+# Builds everything hasktorch.github.io serves: freshly generated haddocks,
+# the tintin-rendered tutorial (whose pages execute real hasktorch code),
+# and a small landing page — uploaded as one `site` artifact.
+#
+# This is deliberately a separate workflow from cabal-linux: it builds only
+# the library (no examples, no test suites), so it finishes faster and site
+# artifacts do not wait on — or fail with — the test matrix.  The site
+# repository's deploy-pages workflow downloads the newest successful `site`
+# artifact on manual dispatch and publishes it.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GHC: '9.8.4'
+    steps:
+
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Setup packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get -y --allow-downgrades --allow-remove-essential --allow-change-held-packages install locales software-properties-common apt-transport-https
+        sudo rm -f /etc/apt/sources.list.d/sbt.list
+        sudo apt-get update -qq
+        sudo apt-get -y purge ghc* cabal-install* php* || true
+        sudo apt-get -y --allow-downgrades --allow-remove-essential --allow-change-held-packages install build-essential zlib1g-dev liblapack-dev libblas-dev devscripts debhelper python3-pip cmake curl wget unzip git libtinfo6 libncurses-dev python3 python3-yaml
+
+    - name: Setup Haskell
+      run: |
+        echo "$HOME/.ghcup/bin" >> "${GITHUB_PATH}"
+        ghcup install ghc --set ${{ env.GHC }}
+        mkdir -p ~/.cabal
+
+    - name: Information about the Haskell setup
+      run: |
+        echo "GHC_VERSION=$(ghc --numeric-version)"     >> "${GITHUB_ENV}"
+        echo "CABAL_VERSION=$(cabal --numeric-version)" >> "${GITHUB_ENV}"
+
+    - name: Generate install-plan
+      run: |
+        ./setup-cabal.sh
+        cabal v2-update
+        cabal v2-build --jobs=2 hasktorch --dry-run
+
+    - name: Restore cached dependencies
+      uses: actions/cache/restore@v4
+      id:   cache
+      with:
+        path: ~/.cabal/store
+        # Same key scheme as cabal-linux, so its caches are reusable here
+        # (and vice versa) through the restore-keys prefix.
+        key:          ${{ runner.os }}-cabal-${{ env.CABAL_VERSION }}-ghc-${{ env.GHC_VERSION }}-plan-${{ hashFiles('**/plan.json') }}
+        restore-keys: ${{ runner.os }}-cabal-${{ env.CABAL_VERSION }}-ghc-${{ env.GHC_VERSION }}-
+
+    - name: Install dependencies
+      run: |
+        cabal v2-build --jobs=2 hasktorch --only-dependencies
+
+    - name: Cache dependencies
+      if:   ${{ steps.cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cabal/store
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - name: Build the library
+      run: |
+        cabal v2-build --jobs=2 hasktorch
+
+    - name: Generate haddocks
+      run: |
+        cabal v2-haddock --jobs=2 hasktorch libtorch-ffi \
+          --haddock-quickjump \
+          --haddock-html-location='https://hackage.haskell.org/package/$pkg-$version/docs'
+        mkdir -p public/haddock
+        for pkg in hasktorch libtorch-ffi; do
+          src=$(find dist-newstyle -type d -path "*/doc/html/$pkg" | head -1)
+          cp -r "$src" "public/haddock/$pkg"
+        done
+
+    - name: Build tutorial
+      run: |
+        # tintin (hasktorch's GHC 9.8/cabal fork) renders hasktorch/doc/;
+        # the documentation pages execute real hasktorch code via runghc.
+        git clone --depth 1 -b feature/ghc98-cabal https://github.com/hasktorch/tintin.git /tmp/tintin
+        (cd /tmp/tintin && cabal v2-build --jobs=2 exe:tintin exe:inlitpp)
+        (cd /tmp/tintin && cabal install --lib inliterate --package-env /tmp/inlit.env)
+        TINTIN=$(cd /tmp/tintin && cabal list-bin exe:tintin)
+        INLITPP_DIR=$(dirname "$(cd /tmp/tintin && cabal list-bin exe:inlitpp)")
+        # runghc needs a package environment in which both hasktorch (built
+        # in-place above) and inliterate (in the cabal store) are visible
+        sed "s|^package-db dist-newstyle/|package-db ${GITHUB_WORKSPACE}/dist-newstyle/|" .ghc.environment.* > /tmp/tutorial.env
+        grep -E "^package-db|^package-id inliterate" /tmp/inlit.env >> /tmp/tutorial.env
+        export GHC_ENVIRONMENT=/tmp/tutorial.env
+        export PATH="$INLITPP_DIR:$PATH"
+        export LD_LIBRARY_PATH="$(dirname "$(find ~/.cache/libtorch -name libtorch.so | head -1)"):${LD_LIBRARY_PATH}"
+        mkdir -p public/tutorial
+        (cd hasktorch && "$TINTIN" run --runghc --outputDirectory "${GITHUB_WORKSPACE}/public/tutorial")
+        ls public/tutorial
+
+    - name: Landing page
+      run: |
+        touch public/.nojekyll
+        cat > public/index.html <<'EOF'
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Hasktorch</title>
+          <style>
+            body { font-family: sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; line-height: 1.6; }
+            h1 { font-weight: 600; }
+            li { margin: 0.4rem 0; }
+          </style>
+        </head>
+        <body>
+          <h1>Hasktorch</h1>
+          <p>Tensors and neural networks in Haskell, on the same libtorch
+             core that powers PyTorch.</p>
+          <ul>
+            <li><a href="tutorial/index.html">Tutorial</a> — from first tensors
+                to typed semantics, with executed examples</li>
+            <li><a href="haddock/hasktorch/index.html">API documentation: hasktorch</a></li>
+            <li><a href="haddock/libtorch-ffi/index.html">API documentation: libtorch-ffi</a></li>
+            <li><a href="https://github.com/hasktorch/hasktorch">GitHub</a></li>
+          </ul>
+        </body>
+        </html>
+        EOF
+
+    - name: Archive site
+      uses: actions/upload-artifact@v4
+      with:
+        name: site
+        path: public
